@@ -622,24 +622,32 @@ export const notificationApi = {
 };
 
 export const reportApi = {
-  /** Writes the file to R2 and returns a download link rather than streaming bytes through the Worker. */
-  export: (
+  /**
+   * Generates the report and returns its bytes in one request — the endpoint is
+   * JWT-guarded, so a bare <a href> would 401. Row count rides along in a header
+   * so the caller can report it without parsing the file.
+   */
+  export: async (
     token: string,
     params: { semesterId: string; sectionId?: string; format?: "csv" | "xlsx"; dateFrom?: string; dateTo?: string }
-  ) => request<{ key: string; rowCount: number; downloadUrl: string }>(`/api/reports/export${qs(params)}`, {}, token),
-  /**
-   * The download route is JWT-guarded, so a bare <a href> would 401 —
-   * fetch it with the auth header and hand back a blob the browser can save.
-   */
-  download: async (token: string, key: string): Promise<Blob> => {
-    const res = await fetch(`${API_URL}/api/reports/download${qs({ key })}`, {
+  ): Promise<{ blob: Blob; filename: string; rowCount: number }> => {
+    const res = await fetch(`${API_URL}/api/reports/export${qs(params)}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new ApiError(res.status, (data as any).error ?? "Download failed");
+      throw new ApiError(res.status, (data as any).error ?? "Export failed");
     }
-    return res.blob();
+
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const filename =
+      disposition.match(/filename="(.+?)"/)?.[1] ?? `attendance.${params.format ?? "csv"}`;
+
+    return {
+      blob: await res.blob(),
+      filename,
+      rowCount: Number(res.headers.get("X-Row-Count") ?? 0),
+    };
   },
 };
 

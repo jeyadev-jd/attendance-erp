@@ -8,9 +8,6 @@ export const exportQuerySchema = z.object({
   dateTo: z.string().date().optional(),
 });
 
-export const downloadQuerySchema = z.object({
-  key: z.string().min(1),
-});
 
 // Attendance backfill import: date,hourNumber,rollNo,status
 export const importRowSchema = z.object({

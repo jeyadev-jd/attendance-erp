@@ -5,10 +5,9 @@ import type { AppEnv } from "../types";
 import { roleGuard } from "../middleware/roleGuard";
 import { assertSemesterInOrg } from "../lib/semesterGuard";
 import { resolveMarkContext } from "../lib/attendanceContext";
-import { putReport, getReport, reportKey } from "../lib/r2";
 import { buildXlsx, rowsToCsv } from "../lib/xlsx";
 import { parseCsvWithHeader } from "../lib/csv";
-import { exportQuerySchema, downloadQuerySchema, importRowSchema } from "../schemas/reports";
+import { exportQuerySchema, importRowSchema } from "../schemas/reports";
 
 const reports = new Hono<AppEnv>();
 const canManage = roleGuard("SUPER_ADMIN", "ADMIN", "CLASS_ADMIN");
@@ -17,10 +16,12 @@ const HEADER = ["date", "hourNumber", "rollNo", "studentName", "section", "subje
 
 /**
  * Exports attendance records (optionally scoped to one section, optionally a
- * date range) as CSV or XLSX, uploads the file to R2 under the org's own
- * prefix, and returns a download URL. Nothing is streamed to the client
- * directly — R2 is the source of truth for the generated file, per the
- * original storage design.
+ * date range) as CSV or XLSX, streamed straight back to the caller.
+ *
+ * An earlier design staged the file in R2 and returned a download URL, but R2 is
+ * not enabled on this account. Generating and returning the bytes in one request
+ * removes the dependency entirely — and for a semester of attendance the payload
+ * is small enough that a round trip through object storage bought nothing.
  */
 reports.get("/export", canManage, async (c) => {
   const query = exportQuerySchema.parse({
@@ -62,59 +63,26 @@ reports.get("/export", canManage, async (c) => {
     r.markedAt.toISOString(),
   ]);
 
-  const filename = `attendance-${query.semesterId}.${query.format}`;
-  const key = reportKey(user.organizationId, filename);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const filename = `attendance-${stamp}.${query.format}`;
 
-  // R2 is optional — the binding is absent until R2 is enabled on the account.
-  const storage = c.env.STORAGE;
-  if (!storage) {
-    throw new HTTPException(503, {
-      message: "Report export is unavailable: R2 storage is not enabled for this deployment",
-    });
-  }
+  const isXlsx = query.format === "xlsx";
+  const body = isXlsx ? buildXlsx(HEADER, rows) : rowsToCsv(HEADER, rows);
 
-  if (query.format === "xlsx") {
-    const data = buildXlsx(HEADER, rows);
-    await putReport(
-      storage,
-      key,
-      data,
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    );
-  } else {
-    const data = rowsToCsv(HEADER, rows);
-    await putReport(storage, key, data, "text/csv");
-  }
-
-  return c.json({ key, rowCount: rows.length, downloadUrl: `/api/reports/download?key=${encodeURIComponent(key)}` });
-});
-
-/** Streams a previously exported report back out of R2. Org-scoped by key prefix. */
-reports.get("/download", canManage, async (c) => {
-  const query = downloadQuerySchema.parse({ key: c.req.query("key") });
-  const user = c.get("user");
-
-  if (!query.key.startsWith(`reports/${user.organizationId}/`)) {
-    throw new HTTPException(403, { message: "Not your organization's report" });
-  }
-
-  const storage = c.env.STORAGE;
-  if (!storage) {
-    throw new HTTPException(503, {
-      message: "Report download is unavailable: R2 storage is not enabled for this deployment",
-    });
-  }
-
-  const object = await getReport(storage, query.key);
-  if (!object) throw new HTTPException(404, { message: "Report not found (may have expired)" });
-
-  return new Response(object.body, {
+  return new Response(body as BodyInit, {
     headers: {
-      "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${query.key.split("/").pop()}"`,
+      "Content-Type": isXlsx
+        ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        : "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      // Lets the browser client read the row count without parsing the file.
+      "X-Row-Count": String(rows.length),
     },
   });
 });
+
+// GET /download used to serve files staged in R2. With exports streamed directly
+// there is nothing to fetch later, so the route is gone.
 
 /**
  * Bulk historical attendance import from CSV: date,hourNumber,rollNo,status.

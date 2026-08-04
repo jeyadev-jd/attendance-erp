@@ -1,4 +1,4 @@
-name = "attendance-api"
+name = "attendance-erp-api"
 main = "src/index.ts"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
@@ -8,12 +8,8 @@ compatibility_flags = ["nodejs_compat"]
 [triggers]
 crons = ["0 20 * * *"] # 20:00 UTC nightly (adjust to your org's local midnight)
 
-# Report export/download (apps/api/src/routes/reports.ts) needs R2. Enable R2 once in
-# the Cloudflare dashboard, then:  npx wrangler r2 bucket create attendance-storage
-# and uncomment this block. Every other route works without it.
-# [[r2_buckets]]
-# binding = "STORAGE"
-# bucket_name = "attendance-storage"
+# No R2: report exports are generated and streamed in the same request, so the
+# only storage this Worker needs is D1.
 
 # D1 (SQLite). Create with:  npx wrangler d1 create attendance-db
 # then paste the printed database_id below.

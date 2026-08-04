@@ -13,33 +13,29 @@ export default function ReportsPage() {
   const sections = useSections(semesterId);
   const [filters, setFilters] = useState({ sectionId: "", format: "xlsx" as "csv" | "xlsx", dateFrom: "", dateTo: "" });
   const [error, setError] = useState<string | null>(null);
-  const [ready, setReady] = useState<{ key: string; rowCount: number } | null>(null);
+  const [done, setDone] = useState<{ filename: string; rowCount: number } | null>(null);
 
+  // One step: the export request returns the file itself, so it saves immediately.
   const generate = useMutation({
-    mutationFn: () =>
-      reportApi.export(token!, {
+    mutationFn: async () => {
+      const res = await reportApi.export(token!, {
         semesterId,
         sectionId: filters.sectionId || undefined,
         format: filters.format,
         dateFrom: filters.dateFrom || undefined,
         dateTo: filters.dateTo || undefined,
-      }),
+      });
+      saveBlob(res.blob, res.filename);
+      return res;
+    },
     onSuccess: (res) => {
       setError(null);
-      setReady({ key: res.key, rowCount: res.rowCount });
+      setDone({ filename: res.filename, rowCount: res.rowCount });
     },
     onError: (err) => {
-      setReady(null);
+      setDone(null);
       setError(err instanceof ApiError ? err.message : "Could not generate report");
     },
-  });
-
-  const download = useMutation({
-    mutationFn: async () => {
-      const blob = await reportApi.download(token!, ready!.key);
-      saveBlob(blob, ready!.key.split("/").pop() ?? "report");
-    },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "Download failed"),
   });
 
   return (
@@ -95,24 +91,17 @@ export default function ReportsPage() {
             disabled={!semesterId || generate.isPending}
             className="mt-4 w-full sm:w-auto"
           >
-            {generate.isPending ? "Generating…" : "Generate report"}
+            {generate.isPending ? "Generating…" : "Download report"}
           </Button>
         </Card>
 
-        {ready && (
+        {done && (
           <Card>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <CardTitle>Report ready</CardTitle>
-                <p className="mt-1 text-sm text-slate-500">
-                  <Badge tone="green">{ready.rowCount} rows</Badge>
-                  <span className="ml-2 break-all text-xs">{ready.key.split("/").pop()}</span>
-                </p>
-              </div>
-              <Button onClick={() => download.mutate()} disabled={download.isPending}>
-                {download.isPending ? "Downloading…" : "Download"}
-              </Button>
-            </div>
+            <CardTitle>Downloaded</CardTitle>
+            <p className="mt-1 text-sm text-slate-500">
+              <Badge tone="green">{done.rowCount} rows</Badge>
+              <span className="ml-2 break-all text-xs">{done.filename}</span>
+            </p>
           </Card>
         )}
       </div>
