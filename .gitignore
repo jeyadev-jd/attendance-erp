@@ -1,0 +1,17 @@
+node_modules/
+
+# Secrets — never commit
+.dev.vars
+.env
+.env.*
+.cf-token
+
+# Build output
+.next/
+.wrangler/
+out/
+dist/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

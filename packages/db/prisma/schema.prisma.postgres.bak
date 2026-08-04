@@ -1,0 +1,475 @@
+// Prisma schema — PostgreSQL (Neon serverless), edge-compatible via @prisma/adapter-neon
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── ENUMS ─────────────────────────
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  CLASS_ADMIN
+  FACULTY
+  STUDENT
+}
+
+enum SemesterStatus {
+  UPCOMING
+  ACTIVE
+  ARCHIVED
+}
+
+enum DayType {
+  WORKING
+  HOLIDAY
+  EXAM
+  INTERNAL_EXAM
+  EVENT
+  WORKSHOP
+  INDUSTRIAL_VISIT
+  SPORTS_DAY
+  SYMPOSIUM
+  STUDY_HOLIDAY
+  CUSTOM
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  VERY_LATE
+  MEDICAL
+  OD
+  DUTY_LEAVE
+  SPORTS
+  WORKSHOP
+  EVENT
+  CANCELLED
+}
+
+enum StudentStatus {
+  ACTIVE
+  INACTIVE
+  GRADUATED
+  TRANSFERRED
+}
+
+enum BunkFlagType {
+  SINGLE_HOUR_SKIP
+  MID_CLASS_BUNK
+}
+
+enum BunkSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum RiskLevel {
+  SAFE
+  WARNING
+  CRITICAL
+}
+
+enum NotificationType {
+  RISK_ALERT
+  BUNK_FLAG
+  ATTENDANCE_EDIT
+  SYSTEM
+  ANNOUNCEMENT
+}
+
+// ───────────────────────── ORG / ACADEMIC STRUCTURE ─────────────────────────
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  academicYears AcademicYear[]
+  departments   Department[]
+  users         User[]
+  settings      Settings?
+
+  @@map("organizations")
+}
+
+model AcademicYear {
+  id             String   @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  label          String // e.g. "2025-2026"
+  startDate      DateTime
+  endDate        DateTime
+  createdAt      DateTime @default(now())
+
+  semesters Semester[]
+
+  @@index([organizationId])
+  @@map("academic_years")
+}
+
+model Semester {
+  id               String         @id @default(cuid())
+  academicYearId   String
+  academicYear     AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  name             String // e.g. "Semester 3"
+  startDate        DateTime
+  endDate          DateTime
+  minAttendancePct Float          @default(80)
+  status           SemesterStatus @default(UPCOMING)
+  clonedFromId     String?        // set when created via clone-to-new-semester
+  createdAt        DateTime       @default(now())
+
+  sections       Section[]
+  calendarDays   CalendarDay[]
+  hourConfigs    HourConfig[]
+  timetables     Timetable[]
+  timetableOverrides TimetableOverride[]
+  attendances    Attendance[]
+  healthScores   HealthScore[]
+
+  @@index([academicYearId])
+  @@map("semesters")
+}
+
+model Department {
+  id             String   @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  code           String
+  name           String
+
+  sections Section[]
+  subjects Subject[]
+  faculty  Faculty[]
+
+  @@unique([organizationId, code])
+  @@map("departments")
+}
+
+model Section {
+  id           String   @id @default(cuid())
+  semesterId   String
+  semester     Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  name         String // e.g. "CSE-A"
+
+  students   Student[]
+  timetables Timetable[]
+  timetableOverrides TimetableOverride[]
+  attendances Attendance[]
+
+  @@unique([semesterId, departmentId, name])
+  @@map("sections")
+}
+
+model Subject {
+  id           String   @id @default(cuid())
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  code         String
+  name         String
+  totalHours   Int      @default(0)
+  // Non-academic slots (mentor-mentee, club activity) still have attendance marked so
+  // absences are on record, but are excluded from every percentage calculation.
+  countsForAttendance Boolean @default(true)
+
+  timetables  Timetable[]
+  timetableOverrides TimetableOverride[]
+  attendances Attendance[]
+
+  @@unique([departmentId, code])
+  @@map("subjects")
+}
+
+// ───────────────────────── CALENDAR ─────────────────────────
+
+model CalendarDay {
+  id         String   @id @default(cuid())
+  semesterId String
+  semester   Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  date       DateTime @db.Date
+  dayType    DayType  @default(WORKING)
+  label      String?
+  notes      String?
+
+  hourOverrides HourOverride[]
+
+  @@unique([semesterId, date])
+  @@index([semesterId, date])
+  @@map("calendar_days")
+}
+
+// Handles partial exam days: hours 1-2 exam (disabled), hours 3-6 normal (enabled)
+model HourOverride {
+  id              String      @id @default(cuid())
+  calendarDayId   String
+  calendarDay     CalendarDay @relation(fields: [calendarDayId], references: [id], onDelete: Cascade)
+  hourNumber      Int
+  attendanceEnabled Boolean   @default(true)
+
+  @@unique([calendarDayId, hourNumber])
+  @@map("hour_overrides")
+}
+
+// Per semester, per day-of-week, per hour — start/end time. Different hour counts per day allowed.
+model HourConfig {
+  id         String   @id @default(cuid())
+  semesterId String
+  semester   Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  dayOfWeek  Int      // 0=Sunday..6=Saturday
+  hourNumber Int
+  startTime  String   // "HH:MM" — stored as string, timezone-agnostic wall-clock
+  endTime    String
+
+  @@unique([semesterId, dayOfWeek, hourNumber])
+  @@map("hour_configs")
+}
+
+// ───────────────────────── TIMETABLE ─────────────────────────
+
+model Timetable {
+  id         String   @id @default(cuid())
+  sectionId  String
+  section    Section  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  dayOfWeek  Int
+  hourNumber Int // first hour of the block
+  // A lab spanning several periods is ONE entry marked once; attendance then writes
+  // one record per covered hour so a 2-hour lab counts as 2 hours, not 1.
+  durationHours Int @default(1)
+  subjectId  String
+  subject    Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  facultyId  String
+  faculty    Faculty  @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  semesterId String
+  semester   Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@unique([sectionId, dayOfWeek, hourNumber])
+  // Faculty conflict check (same faculty, day, hour, different section) enforced in route logic
+  // since Prisma unique constraints can't express cross-section exclusion directly.
+  @@index([facultyId, dayOfWeek, hourNumber])
+  @@map("timetables")
+}
+
+// A one-off change to a single date's schedule, leaving the weekly Timetable intact.
+// Covers "today hour 3 is Data Mining instead of Computer Networks" and
+// "hour 5 is cancelled today" without editing the recurring pattern.
+//
+// Resolution order when marking attendance: an override for that exact date+hour wins;
+// otherwise the weekly Timetable applies.
+model TimetableOverride {
+  id         String   @id @default(cuid())
+  sectionId  String
+  section    Section  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  semesterId String
+  semester   Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  date       DateTime @db.Date
+  hourNumber Int
+  durationHours Int   @default(1)
+
+  // Null subject = the period is cancelled for this date (free hour, nothing to mark).
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  facultyId String?
+  faculty   Faculty? @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+
+  reason      String?
+  createdById String
+  createdBy   User     @relation("OverrideCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@unique([sectionId, date, hourNumber])
+  @@index([sectionId, date])
+  @@map("timetable_overrides")
+}
+
+// ───────────────────────── USERS ─────────────────────────
+
+model User {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email              String
+  name               String?
+  externalId         String?  // college-issued unique id, e.g. "E0324052"
+  passwordHash       String
+  role               Role
+  isActive           Boolean  @default(true)
+
+  // First-login forced password change flow
+  mustChangePassword Boolean  @default(true)
+
+  // OTP for first-login verification / password reset (hashed, single-use, short TTL)
+  otpHash            String?
+  otpExpiresAt       DateTime?
+  otpAttempts        Int      @default(0)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  student  Student?
+  faculty  Faculty?
+  markedAttendances     Attendance[] @relation("MarkedBy")
+  auditLogsChanged      AuditLog[]
+  notifications         Notification[]
+  timetableOverrides    TimetableOverride[] @relation("OverrideCreatedBy")
+
+  @@unique([organizationId, email])
+  @@unique([organizationId, externalId])
+  @@map("users")
+}
+
+model Student {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sectionId String
+  section   Section  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  rollNo    String
+  name      String
+  status    StudentStatus @default(ACTIVE)
+
+  attendances  Attendance[]
+  healthScores HealthScore[]
+  bunkFlags    BunkFlag[]
+
+  @@unique([sectionId, rollNo])
+  @@map("students")
+}
+
+model Faculty {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  employeeId   String
+  name         String
+
+  timetables Timetable[]
+  timetableOverrides TimetableOverride[]
+
+  @@unique([departmentId, employeeId])
+  @@map("faculty")
+}
+
+// ───────────────────────── ATTENDANCE ─────────────────────────
+
+model Attendance {
+  id           String   @id @default(cuid())
+  date         DateTime @db.Date
+  hourNumber   Int
+  semesterId   String
+  semester     Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  subjectId    String
+  subject      Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  sectionId    String
+  section      Section  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  studentId    String
+  student      Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  status       AttendanceStatus
+  arrivalTime  String?  // "HH:MM"
+  lateMinutes  Int?
+
+  markedById   String
+  markedBy     User     @relation("MarkedBy", fields: [markedById], references: [id])
+  markedAt     DateTime @default(now())
+  isLocked     Boolean  @default(false)
+
+  auditLogs AuditLog[]
+
+  @@unique([date, hourNumber, studentId, subjectId])
+  @@index([sectionId, date])
+  @@index([studentId, semesterId])
+  @@map("attendance")
+}
+
+model AuditLog {
+  id           String     @id @default(cuid())
+  attendanceId String
+  attendance   Attendance @relation(fields: [attendanceId], references: [id], onDelete: Cascade)
+  oldStatus    AttendanceStatus?
+  newStatus    AttendanceStatus
+  reason       String
+  changedById  String
+  changedBy    User       @relation(fields: [changedById], references: [id])
+  changedAt    DateTime   @default(now())
+
+  @@index([attendanceId])
+  @@map("audit_logs")
+}
+
+// ───────────────────────── SETTINGS ─────────────────────────
+
+model Settings {
+  id                      String       @id @default(cuid())
+  organizationId          String       @unique
+  organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  minAttendancePct        Float        @default(80)
+  gracePeriodMinutes      Int          @default(5)
+  lateThresholdMinutes    Int          @default(15)
+  veryLateThresholdMinutes Int         @default(30)
+  editWindowHours         Int          @default(24)
+  autoLockAfterDays       Int          @default(3)
+  updatedAt               DateTime     @updatedAt
+
+  @@map("settings")
+}
+
+// ───────────────────────── ANALYTICS ─────────────────────────
+
+model BunkFlag {
+  id         String       @id @default(cuid())
+  studentId  String
+  student    Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  date       DateTime     @db.Date
+  flagType   BunkFlagType
+  severity   BunkSeverity
+  pattern    String       // e.g. "P-P-A-P-P"
+  createdAt  DateTime     @default(now())
+
+  @@index([studentId, date])
+  @@map("bunk_flags")
+}
+
+// Cached per student per semester, recalculated nightly via cron
+model HealthScore {
+  id                String   @id @default(cuid())
+  studentId         String
+  student           Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  semesterId        String
+  semester          Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  overallPct        Float
+  safeBunkHours      Int
+  recoveryHours      Int
+  lateCount          Int
+  riskLevel          RiskLevel
+  projectedEndPct    Float
+  updatedAt          DateTime @updatedAt
+
+  @@unique([studentId, semesterId])
+  @@map("health_scores")
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}

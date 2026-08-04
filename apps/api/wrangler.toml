@@ -1,0 +1,36 @@
+name = "attendance-api"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Free tier: no paid features enabled below.
+
+[triggers]
+crons = ["0 20 * * *"] # 20:00 UTC nightly (adjust to your org's local midnight)
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "attendance-storage"
+
+# D1 (SQLite). Create with:  npx wrangler d1 create attendance-db
+# then paste the printed database_id below.
+[[d1_databases]]
+binding = "DB"
+database_name = "attendance-db"
+database_id = "cd4bd7b1-9b4b-4f5d-8efb-5264db2d7e53"
+# Flat .sql files, as wrangler expects. Prisma writes its own nested copy under
+# prisma/migrations/; regenerate this one with:
+#   npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script
+migrations_dir = "../../packages/db/prisma/d1-migrations"
+
+# Secrets (set via `wrangler secret put`, never committed):
+#   JWT_SECRET        — signing key for access tokens
+#   SMTP_USER         — Gmail address used to send OTP mail
+#   SMTP_PASS         — Gmail App Password (not the account password)
+
+[vars]
+JWT_EXPIRY_SECONDS = "3600"
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = "587"
+OTP_TTL_MINUTES = "10"
+TEMP_STUDENT_PASSWORD = "Student@123"

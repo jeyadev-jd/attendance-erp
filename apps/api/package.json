@@ -1,0 +1,29 @@
+{
+  "name": "@attendance/api",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/dev-server.ts",
+    "dev:workerd": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@attendance/db": "*",
+    "@hono/node-server": "^2.0.12",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.6.1",
+    "hono": "^4.6.9",
+    "nodemailer": "^9.0.3",
+    "xlsx": "^0.18.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241022.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/nodemailer": "^8.0.1",
+    "@types/pg": "^8.20.3",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3",
+    "wrangler": "^3.80.0"
+  }
+}
