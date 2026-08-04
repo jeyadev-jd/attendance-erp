@@ -1,13 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authApi, ApiError } from "@/lib/api";
 import { useAuthStore, decodeClaims } from "@/store/authStore";
 import { PasswordInput } from "@/components/PasswordInput";
 import { homeFor } from "@/components/AppShell";
 
+/**
+ * useSearchParams() opts a route into client-side rendering, so Next refuses to
+ * prerender it unless a Suspense boundary marks the bail-out point. The form
+ * itself lives in FirstLoginForm below.
+ */
 export default function FirstLoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center px-4">
+          <p className="text-sm text-slate-500">Loading…</p>
+        </div>
+      }
+    >
+      <FirstLoginForm />
+    </Suspense>
+  );
+}
+
+function FirstLoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const setToken = useAuthStore((s) => s.setToken);

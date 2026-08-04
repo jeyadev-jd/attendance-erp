@@ -11,7 +11,9 @@ export type Bindings = {
   SMTP_PASS: string;
   OTP_TTL_MINUTES: string;
   TEMP_STUDENT_PASSWORD: string;
-  STORAGE: R2Bucket;
+  /** Optional: only bound once R2 is enabled on the account. Report export/download
+   *  is the only feature that needs it. */
+  STORAGE?: R2Bucket;
 };
 
 export type JwtPayload = {

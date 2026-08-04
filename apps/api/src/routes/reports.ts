@@ -65,17 +65,25 @@ reports.get("/export", canManage, async (c) => {
   const filename = `attendance-${query.semesterId}.${query.format}`;
   const key = reportKey(user.organizationId, filename);
 
+  // R2 is optional — the binding is absent until R2 is enabled on the account.
+  const storage = c.env.STORAGE;
+  if (!storage) {
+    throw new HTTPException(503, {
+      message: "Report export is unavailable: R2 storage is not enabled for this deployment",
+    });
+  }
+
   if (query.format === "xlsx") {
     const data = buildXlsx(HEADER, rows);
     await putReport(
-      c.env.STORAGE,
+      storage,
       key,
       data,
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     );
   } else {
     const data = rowsToCsv(HEADER, rows);
-    await putReport(c.env.STORAGE, key, data, "text/csv");
+    await putReport(storage, key, data, "text/csv");
   }
 
   return c.json({ key, rowCount: rows.length, downloadUrl: `/api/reports/download?key=${encodeURIComponent(key)}` });
@@ -90,7 +98,14 @@ reports.get("/download", canManage, async (c) => {
     throw new HTTPException(403, { message: "Not your organization's report" });
   }
 
-  const object = await getReport(c.env.STORAGE, query.key);
+  const storage = c.env.STORAGE;
+  if (!storage) {
+    throw new HTTPException(503, {
+      message: "Report download is unavailable: R2 storage is not enabled for this deployment",
+    });
+  }
+
+  const object = await getReport(storage, query.key);
   if (!object) throw new HTTPException(404, { message: "Report not found (may have expired)" });
 
   return new Response(object.body, {

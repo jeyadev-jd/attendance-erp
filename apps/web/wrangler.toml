@@ -8,4 +8,4 @@ directory = ".open-next/assets"
 binding = "ASSETS"
 
 [vars]
-NEXT_PUBLIC_API_URL = "https://attendance-api.<your-subdomain>.workers.dev"
+NEXT_PUBLIC_API_URL = "https://attendance-api.e0324090.workers.dev"
