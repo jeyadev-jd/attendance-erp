@@ -13,6 +13,8 @@ Most attendance trackers assume one semester, one hour per class, and a student 
 
 This system models all of that explicitly rather than approximating it.
 
+**Live:** [attendance-erp.e0324090.workers.dev](https://attendance-erp.e0324090.workers.dev) · API at [attendance-erp-api.e0324090.workers.dev](https://attendance-erp-api.e0324090.workers.dev)
+
 ---
 
 ## Features
@@ -61,7 +63,7 @@ This system models all of that explicitly rather than approximating it.
 ### Automation
 - Nightly cron recalculates health scores, detects bunk patterns, and raises risk alerts
 - Notifications at warning and critical attendance thresholds
-- Excel/CSV export stored in R2 with authenticated download
+- Excel/CSV export generated and streamed on request (no object storage needed)
 
 ---
 
@@ -85,7 +87,6 @@ attendance-erp/
 | Data fetching | TanStack Query | Cache, invalidation, optimistic states |
 | Auth state | Zustand + `persist` | JWT in localStorage, hydration-aware guard |
 | Database | **Cloudflare D1** (SQLite) | Accessed through Prisma's D1 driver adapter |
-| Storage | R2 | Report exports |
 | Validation | Zod | Every request body and query string |
 
 ### Data model
@@ -144,7 +145,29 @@ Every seeded user starts with a shared temporary password and `mustChangePasswor
 
 ---
 
-## Deploying to Cloudflare
+## Deploying from GitHub (Workers Builds)
+
+Each app is a separate Worker, so the repository connects **twice** — once per
+Worker. Connecting a repo is dashboard-only; there is no wrangler command for it.
+
+In **Workers & Pages → \<worker\> → Settings → Builds → Connect**, pick this repo and set:
+
+| Setting | `attendance-erp-api` | `attendance-erp` |
+|---|---|---|
+| Root directory | `apps/api` | `apps/web` |
+| Build command | *(leave empty)* | `npx opennextjs-cloudflare build` |
+| Deploy command | `npx wrangler deploy` | `npx opennextjs-cloudflare deploy` |
+
+The Worker name in the dashboard must match `name` in that directory's
+`wrangler.toml`, or the build is rejected.
+
+Prisma's client is generated, not committed, so the root `package.json` runs
+`db:generate` on `postinstall` — that covers both builds without a custom command.
+
+Secrets are **not** read from the repo. Set them once per Worker with
+`wrangler secret put` (below); Workers Builds keeps them across deploys.
+
+## Deploying from your machine
 
 ```bash
 # 1. Create the database
