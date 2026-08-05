@@ -17,6 +17,16 @@ This system models all of that explicitly rather than approximating it.
 
 ---
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Login](screenshots/01-login.png) Login | ![Dashboard](screenshots/02-dashboard.png) Admin dashboard — org-wide stats + personal attendance |
+| ![Analytics](screenshots/03-analytics.png) Analytics — heatmap, bunk leaderboard, late analytics | ![Timetable](screenshots/04-timetable.png) Timetable builder |
+| ![Calendar](screenshots/05-calendar.png) Calendar — day types, per-hour overrides | ![Bunk calculator](screenshots/06-bunk-calculator.png) Bunk calculator with projected crossing dates |
+
+---
+
 ## Features
 
 ### Attendance marking
