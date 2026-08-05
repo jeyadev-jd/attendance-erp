@@ -13,8 +13,6 @@ Most attendance trackers assume one semester, one hour per class, and a student 
 
 This system models all of that explicitly rather than approximating it.
 
-**Live:** [attendance-erp.e0324090.workers.dev](https://attendance-erp.e0324090.workers.dev) · API at [attendance-erp-api.e0324090.workers.dev](https://attendance-erp-api.e0324090.workers.dev)
-
 ---
 
 ## Screenshots
