@@ -17,7 +17,7 @@ const STATUS_STYLE: Record<MarkableStatus, string> = {
   OD: "bg-blue-600 text-white",
 };
 
-const HOURS = [1, 2, 3, 4, 5, 6, 7, 8];
+const HOURS = [1, 2, 3, 4, 5, 6, 7];
 
 export default function MarkAttendancePage() {
   const token = useToken();

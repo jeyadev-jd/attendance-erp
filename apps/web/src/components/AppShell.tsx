@@ -19,6 +19,7 @@ const ADMIN_NAV: NavItem[] = [
   { href: "/admin/students", label: "Students", short: "Students", roles: "admin" },
   // Class admins are students in their own batch, so they get the student portal too.
   { href: "/student/dashboard", label: "My Attendance", short: "Mine", roles: "admin" },
+  { href: "/student/calculators", label: "My Bunk Calculator", short: "Calc", roles: "admin" },
   { href: "/admin/users", label: "Admins & Staff", short: "Staff", roles: "admin" },
   { href: "/admin/timetable", label: "Timetable", short: "Timetable", roles: "admin" },
   { href: "/admin/calendar", label: "Calendar", short: "Calendar", roles: "admin" },

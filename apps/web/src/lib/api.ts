@@ -568,6 +568,8 @@ export type TimetableOverride = {
   subjectId: string | null;
   facultyId: string | null;
   reason: string | null;
+  /** Null means "use the subject's own default". */
+  countsForAttendance: boolean | null;
   subject?: { code: string; name: string } | null;
   faculty?: { name: string } | null;
   createdBy?: { name: string | null };
@@ -577,7 +579,11 @@ export type TimetableOverride = {
 export const timetableOverrideApi = {
   list: (token: string, params: { sectionId: string; dateFrom?: string; dateTo?: string }) =>
     request<TimetableOverride[]>(`/api/timetable/overrides${qs(params)}`, {}, token),
-  /** subjectId null cancels that period for the date. */
+  /**
+   * subjectId null cancels that period for the date (no attendance taken).
+   * countsForAttendance false tracks attendance (bunk detection still applies)
+   * without moving anyone's percentage; omit/true to use the subject's own default.
+   */
   set: (
     token: string,
     body: {
@@ -589,6 +595,7 @@ export const timetableOverrideApi = {
       subjectId?: string | null;
       facultyId?: string | null;
       reason?: string;
+      countsForAttendance?: boolean;
     }
   ) => request<TimetableOverride>("/api/timetable/overrides", { method: "PUT", body: JSON.stringify(body) }, token),
   remove: (token: string, id: string) =>

@@ -21,7 +21,7 @@ import {
 import { analyticsApi, type DateRange } from "@/lib/api";
 import { useSemesters, useSections, useToken, DAY_SHORT, toDateInput } from "@/lib/hooks";
 
-const HOURS = [1, 2, 3, 4, 5, 6, 7, 8];
+const HOURS = [1, 2, 3, 4, 5, 6, 7];
 const WEEKDAYS = [1, 2, 3, 4, 5, 6];
 
 /** Green → red scale; null (no classes that slot) renders as an empty cell. */

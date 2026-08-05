@@ -4,12 +4,17 @@ import type { AttendanceStatus } from "@attendance/db";
 export const PRESENT_STATUSES: AttendanceStatus[] = ["PRESENT", "LATE", "VERY_LATE", "MEDICAL", "OD"];
 
 /**
- * Prisma `where` fragment restricting a query to subjects that count toward attendance.
- * Non-academic slots (mentor-mentee, club activity) still have attendance marked so
- * absences are recorded, but must never move a percentage — spread this into every
- * query whose result feeds a calculation.
+ * Prisma `where` fragment restricting a query to attendance rows that count toward
+ * a percentage. Non-academic slots (mentor-mentee, club activity) and one-off
+ * "tracked but not counted" overrides still have attendance marked so absences are
+ * recorded and bunk detection still applies, but must never move a percentage —
+ * spread this into every query whose result feeds a calculation.
+ *
+ * Read from the attendance row itself (snapshotted at write time from the override
+ * or subject), not a live join to Subject — a later change to a subject's default
+ * must not retroactively rewrite the meaning of already-marked days.
  */
-export const COUNTS_FOR_ATTENDANCE = { subject: { countsForAttendance: true } } as const;
+export const COUNTS_FOR_ATTENDANCE = { countsForAttendance: true } as const;
 
 /**
  * Accepts a bare string because D1/SQLite stores status as TEXT — rows read back from

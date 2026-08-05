@@ -85,6 +85,11 @@ export async function resolveMarkContext(
     }
   }
 
+  // The override can opt a one-off date in/out of counting independent of the
+  // subject's own default; falls back to the subject's setting when unset.
+  const countsForAttendance: boolean =
+    overrideEntry?.countsForAttendance ?? timetableEntry.subject.countsForAttendance;
+
   return {
     section,
     calendarDay,
@@ -92,6 +97,7 @@ export async function resolveMarkContext(
     timetableEntry,
     date,
     coveredHours,
+    countsForAttendance,
     // True when this date's schedule was changed one-off rather than following the weekly pattern.
     isOverride: !!overrideEntry,
     overrideReason: overrideEntry?.reason ?? null,

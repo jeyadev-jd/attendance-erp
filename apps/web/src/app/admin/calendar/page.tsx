@@ -236,7 +236,7 @@ export default function CalendarPage() {
                 Turn a specific hour off — e.g. hours 1–2 are an exam, 3–6 run as normal classes.
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
-                {Array.from({ length: 8 }, (_, i) => i + 1).map((hour) => {
+                {Array.from({ length: 7 }, (_, i) => i + 1).map((hour) => {
                   const override = selected.hourOverrides?.find((h) => h.hourNumber === hour);
                   const enabled = override ? override.attendanceEnabled : true;
                   return (

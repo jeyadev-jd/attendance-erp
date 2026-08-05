@@ -147,7 +147,7 @@ studentPortal.get("/timeline", async (c) => {
       hourNumber: r.hourNumber,
       subject: r.subject.name,
       status: r.status,
-      countsForAttendance: r.subject.countsForAttendance,
+      countsForAttendance: r.countsForAttendance,
     });
     byDate.set(key, list);
   }

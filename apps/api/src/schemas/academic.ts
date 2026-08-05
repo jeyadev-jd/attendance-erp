@@ -60,11 +60,15 @@ export const timetableOverrideSchema = z.object({
   semesterId: z.string().cuid(),
   sectionId: z.string().cuid(),
   date: z.string().date(),
-  hourNumber: z.number().int().min(1),
-  durationHours: z.number().int().min(1).max(8).default(1),
+  hourNumber: z.number().int().min(1).max(7),
+  durationHours: z.number().int().min(1).max(7).default(1),
   subjectId: z.string().cuid().nullable().optional(),
   facultyId: z.string().cuid().nullable().optional(),
   reason: z.string().optional(),
+  // Overrides the subject's own countsForAttendance for just this date+hour. Distinct
+  // from cancel (null subjectId): attendance is still marked, so a no-show still
+  // trips bunk detection, but omit or set false to keep it out of the percentage.
+  countsForAttendance: z.boolean().nullable().optional(),
 });
 
 export const overrideListQuerySchema = z.object({

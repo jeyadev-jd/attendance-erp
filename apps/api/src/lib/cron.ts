@@ -8,14 +8,21 @@ import {
   COUNTS_FOR_ATTENDANCE,
 } from "./calculators";
 
+/** Fixed threshold for the "below 80%" alert — independent of the semester's own
+ *  configurable minAttendancePct/CRITICAL cutoff, since 80% was asked for explicitly. */
+const LOW_ATTENDANCE_THRESHOLD = 80;
+
 /**
  * Nightly job: recalculates every active student's cached HealthScore, flags
- * mid-class bunk patterns (BunkFlag), and raises a RISK_ALERT notification for
- * anyone newly CRITICAL. Runs across all organizations — this is a single
- * shared Worker cron, not scoped to one tenant.
+ * mid-class bunk patterns (BunkFlag), and sends two kinds of notification —
+ * a below-80%-attendance alert, and an end-of-day summary of that day's bunk
+ * flags. Runs across all organizations — this is a single shared Worker cron,
+ * not scoped to one tenant.
  */
 export async function runNightlyJob(prisma: any) {
   const activeSemesters = await prisma.semester.findMany({ where: { status: "ACTIVE" } });
+  const today = new Date();
+  const todayKey = today.toISOString().slice(0, 10);
 
   let studentsProcessed = 0;
   let flagsCreated = 0;
@@ -85,6 +92,21 @@ export async function runNightlyJob(prisma: any) {
         notificationsCreated++;
       }
 
+      // Separate, fixed-threshold alert: only fires the day it first crosses below
+      // 80% (not every night while it stays there), so it doesn't spam.
+      const wasAbove80 = previous ? previous.overallPct >= LOW_ATTENDANCE_THRESHOLD : true;
+      if (overallPct < LOW_ATTENDANCE_THRESHOLD && wasAbove80) {
+        await prisma.notification.create({
+          data: {
+            userId: student.userId,
+            type: "RISK_ALERT",
+            title: "Attendance below 80%",
+            message: `Your overall attendance is ${overallPct.toFixed(1)}%, below 80%. Recovery hours needed: ${recoveryHours(present, total, LOW_ATTENDANCE_THRESHOLD)}.`,
+          },
+        });
+        notificationsCreated++;
+      }
+
       // Mid-class bunk detection: scan each day's hourly sequence for this student.
       const byDate = new Map<string, string[]>();
       for (const r of records) {
@@ -93,8 +115,12 @@ export async function runNightlyJob(prisma: any) {
         list.push(r.status);
         byDate.set(key, list);
       }
+
+      let todaysFlagCount = 0;
       for (const [dateStr, statuses] of byDate) {
         const flags = detectMidClassBunk(statuses as any);
+        if (dateStr === todayKey) todaysFlagCount = flags.length;
+
         for (const flag of flags) {
           const date = new Date(`${dateStr}T00:00:00.000Z`);
           const existing = await prisma.bunkFlag.findFirst({
@@ -112,6 +138,20 @@ export async function runNightlyJob(prisma: any) {
           });
           flagsCreated++;
         }
+      }
+
+      // Personal end-of-day notice: only the student themself, only when today
+      // actually produced a flag for them — no notification on a clean day.
+      if (todaysFlagCount > 0) {
+        await prisma.notification.create({
+          data: {
+            userId: student.userId,
+            type: "BUNK_FLAG",
+            title: "Bunk pattern detected today",
+            message: `${todaysFlagCount} mid-class bunk pattern${todaysFlagCount === 1 ? "" : "s"} flagged on your attendance today.`,
+          },
+        });
+        notificationsCreated++;
       }
 
       studentsProcessed++;

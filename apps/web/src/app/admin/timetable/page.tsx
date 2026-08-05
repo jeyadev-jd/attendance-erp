@@ -27,7 +27,7 @@ import {
 } from "@/lib/api";
 import { useSections, useSemesters, useToken, DAY_NAMES, DAY_SHORT, toDateInput } from "@/lib/hooks";
 
-const HOURS = [1, 2, 3, 4, 5, 6, 7, 8];
+const HOURS = [1, 2, 3, 4, 5, 6, 7];
 const WEEKDAYS = [1, 2, 3, 4, 5, 6]; // Mon–Sat; Sunday is a holiday
 
 /** Modes are mutually exclusive so a click on the grid always has one clear meaning. */
@@ -65,6 +65,10 @@ export default function TimetablePage() {
     facultyId: "",
     reason: "",
     cancel: false,
+    // Attendance is still taken (so bunk detection still catches a skip) but the
+    // hour is excluded from the percentage — distinct from `cancel`, which takes
+    // no attendance at all.
+    trackButNotCount: false,
   });
 
   const entries = useQuery({
@@ -195,9 +199,17 @@ export default function TimetablePage() {
         subjectId: overrideForm.cancel ? null : overrideForm.subjectId,
         facultyId: overrideForm.cancel ? null : overrideForm.facultyId,
         reason: overrideForm.reason || undefined,
+        countsForAttendance: overrideForm.cancel ? undefined : !overrideForm.trackButNotCount,
       }),
     onSuccess: () => {
-      setOverrideForm({ hourNumber: 1, subjectId: "", facultyId: "", reason: "", cancel: false });
+      setOverrideForm({
+        hourNumber: 1,
+        subjectId: "",
+        facultyId: "",
+        reason: "",
+        cancel: false,
+        trackButNotCount: false,
+      });
       succeed("Override saved for that date.");
     },
     onError,
@@ -672,15 +684,32 @@ export default function TimetablePage() {
                     placeholder="e.g. Faculty on leave"
                   />
                 </Field>
-                <label className="flex items-end gap-2 pb-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={overrideForm.cancel}
-                    onChange={(e) => setOverrideForm({ ...overrideForm, cancel: e.target.checked })}
-                    className="h-4 w-4"
-                  />
-                  Cancel this period instead (no attendance)
-                </label>
+                <div className="flex flex-col justify-end gap-2 pb-1">
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={overrideForm.cancel}
+                      onChange={(e) => setOverrideForm({ ...overrideForm, cancel: e.target.checked })}
+                      className="h-4 w-4"
+                    />
+                    Cancel this period instead (no attendance)
+                  </label>
+                  <label
+                    className={cn(
+                      "flex items-center gap-2 text-sm",
+                      overrideForm.cancel ? "text-slate-400" : "text-slate-700"
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={overrideForm.trackButNotCount}
+                      disabled={overrideForm.cancel}
+                      onChange={(e) => setOverrideForm({ ...overrideForm, trackButNotCount: e.target.checked })}
+                      className="h-4 w-4"
+                    />
+                    Attendance is taken, but doesn't count — still tracked to catch bunkers
+                  </label>
+                </div>
               </div>
               <Button
                 onClick={() => setOverride.mutate()}
@@ -704,6 +733,9 @@ export default function TimetablePage() {
                             {o.subject ? `${o.subject.code} — ${o.subject.name}` : "Cancelled"}
                             {o.faculty ? ` · ${o.faculty.name}` : ""}
                           </p>
+                          {o.subject && o.countsForAttendance === false && (
+                            <Badge tone="amber">Tracked, not counted</Badge>
+                          )}
                           {o.reason && <p className="text-xs italic text-slate-500">{o.reason}</p>}
                         </div>
                         <button onClick={() => removeOverride.mutate(o.id)} className="shrink-0 text-sm text-red-600">

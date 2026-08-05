@@ -268,6 +268,7 @@ timetable.put("/overrides", canManage, async (c) => {
       subjectId: body.subjectId ?? null,
       facultyId: body.facultyId ?? null,
       reason: body.reason,
+      countsForAttendance: body.countsForAttendance ?? null,
       createdById: user.sub,
     },
     create: {
@@ -279,6 +280,7 @@ timetable.put("/overrides", canManage, async (c) => {
       subjectId: body.subjectId ?? null,
       facultyId: body.facultyId ?? null,
       reason: body.reason,
+      countsForAttendance: body.countsForAttendance ?? null,
       createdById: user.sub,
     },
     include: { subject: true, faculty: true },

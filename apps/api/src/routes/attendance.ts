@@ -24,13 +24,8 @@ attendance.get("/mark", canMark, async (c) => {
   const prisma = c.get("prisma");
   const user = c.get("user");
 
-  const { timetableEntry, date, coveredHours, isOverride, overrideReason } = await resolveMarkContext(
-    prisma,
-    user.organizationId,
-    query.sectionId,
-    query.date,
-    query.hourNumber
-  );
+  const { timetableEntry, date, coveredHours, isOverride, overrideReason, countsForAttendance } =
+    await resolveMarkContext(prisma, user.organizationId, query.sectionId, query.date, query.hourNumber);
 
   const studentList = await prisma.student.findMany({
     where: { sectionId: query.sectionId, status: "ACTIVE" },
@@ -56,7 +51,7 @@ attendance.get("/mark", canMark, async (c) => {
     hourNumber: timetableEntry.hourNumber,
     durationHours: timetableEntry.durationHours,
     coveredHours,
-    countsForAttendance: timetableEntry.subject.countsForAttendance,
+    countsForAttendance,
     isOverride,
     overrideReason,
     students: studentList.map((s: any) => {
@@ -79,7 +74,7 @@ attendance.post("/mark", canMark, async (c) => {
   const prisma = c.get("prisma");
   const user = c.get("user");
 
-  const { timetableEntry, date, coveredHours } = await resolveMarkContext(
+  const { timetableEntry, date, coveredHours, countsForAttendance } = await resolveMarkContext(
     prisma,
     user.organizationId,
     body.sectionId,
@@ -117,7 +112,7 @@ attendance.post("/mark", canMark, async (c) => {
             subjectId: timetableEntry.subjectId,
           },
         },
-        update: { status: r.status, markedById: user.sub, markedAt: new Date() },
+        update: { status: r.status, countsForAttendance, markedById: user.sub, markedAt: new Date() },
         create: {
           date,
           hourNumber: hour,
@@ -126,6 +121,7 @@ attendance.post("/mark", canMark, async (c) => {
           sectionId: body.sectionId,
           studentId: r.studentId,
           status: r.status,
+          countsForAttendance,
           markedById: user.sub,
         },
       })

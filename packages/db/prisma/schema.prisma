@@ -216,6 +216,11 @@ model TimetableOverride {
   facultyId String?
   faculty   Faculty? @relation(fields: [facultyId], references: [id], onDelete: Cascade)
 
+  // Overrides the subject's own countsForAttendance for just this date+hour — e.g. an
+  // impromptu seminar that's still worth tracking (so a no-show still flags as a bunk)
+  // but shouldn't move anyone's percentage. Null means "use the subject's own setting".
+  countsForAttendance Boolean?
+
   reason      String?
   createdById String
   createdBy   User     @relation("OverrideCreatedBy", fields: [createdById], references: [id])
@@ -314,6 +319,12 @@ model Attendance {
   status       String   /// PRESENT | ABSENT | LATE | VERY_LATE | MEDICAL | OD | DUTY_LEAVE | SPORTS | WORKSHOP | EVENT | CANCELLED
   arrivalTime  String?  // "HH:MM"
   lateMinutes  Int?
+
+  // Snapshotted at write time from the subject (or the one-off override that produced
+  // this record, if any). Lets a specific date's period be tracked — attendance is
+  // still taken, so a skip still trips bunk detection — without moving the percentage.
+  // Distinct from a cancelled period, which has no attendance rows at all.
+  countsForAttendance Boolean @default(true)
 
   markedById   String
   markedBy     User     @relation("MarkedBy", fields: [markedById], references: [id])

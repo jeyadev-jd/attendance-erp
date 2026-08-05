@@ -117,6 +117,7 @@ reports.post("/import", canManage, async (c) => {
     studentId: string;
     subjectId: string;
     status: z.infer<typeof importRowSchema>["status"];
+    countsForAttendance: boolean;
   }[] = [];
 
   const contextCache = new Map<string, any>(); // "date::hour" -> resolveMarkContext result | Error
@@ -152,7 +153,14 @@ reports.post("/import", canManage, async (c) => {
       continue;
     }
 
-    validRows.push({ date, hourNumber: hour, studentId: student.id, subjectId: ctx.timetableEntry.subjectId, status });
+    validRows.push({
+      date,
+      hourNumber: hour,
+      studentId: student.id,
+      subjectId: ctx.timetableEntry.subjectId,
+      status,
+      countsForAttendance: ctx.countsForAttendance,
+    });
   }
 
   if (errors.length > 0) {
@@ -170,7 +178,7 @@ reports.post("/import", canManage, async (c) => {
             subjectId: row.subjectId,
           },
         },
-        update: { status: row.status, markedById: user.sub, markedAt: new Date() },
+        update: { status: row.status, countsForAttendance: row.countsForAttendance, markedById: user.sub, markedAt: new Date() },
         create: {
           date: new Date(`${row.date}T00:00:00.000Z`),
           hourNumber: row.hourNumber,
@@ -179,6 +187,7 @@ reports.post("/import", canManage, async (c) => {
           sectionId,
           studentId: row.studentId,
           status: row.status,
+          countsForAttendance: row.countsForAttendance,
           markedById: user.sub,
         },
       })

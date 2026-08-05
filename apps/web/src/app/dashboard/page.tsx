@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell, navFor } from "@/components/AppShell";
 import { PageHeader, Card, CardTitle, Badge, Spinner, EmptyState } from "@/components/ui";
-import { analyticsApi, notificationApi } from "@/lib/api";
+import { analyticsApi, notificationApi, studentApi } from "@/lib/api";
 import { useSemesters, useToken } from "@/lib/hooks";
 import { useClaims, isAdminRole } from "@/store/authStore";
 import { Select } from "@/components/ui";
@@ -42,6 +42,17 @@ export default function DashboardPage() {
     enabled: !!token,
   });
 
+  // Class admins are often students in their own batch. This is a personal figure —
+  // 404s for staff with no Student profile, so failure is swallowed rather than shown.
+  const myAttendance = useQuery({
+    queryKey: ["student-dashboard", "self"],
+    queryFn: () => studentApi.getDashboard(token!),
+    enabled: !!token,
+    retry: false,
+    throwOnError: false,
+  });
+  const hasStudentProfile = myAttendance.isSuccess;
+
   const list = subjects.data ?? [];
   const overall = list.length
     ? list.reduce((sum, s) => sum + s.pct * s.total, 0) / Math.max(list.reduce((sum, s) => sum + s.total, 0), 1)
@@ -75,7 +86,7 @@ export default function DashboardPage() {
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Card>
-              <p className="text-xs text-slate-500">Overall attendance</p>
+              <p className="text-xs text-slate-500">Org-wide attendance</p>
               <p className="mt-1 text-2xl font-semibold">{overall === null ? "—" : `${overall.toFixed(1)}%`}</p>
             </Card>
             <Card>
@@ -83,7 +94,7 @@ export default function DashboardPage() {
               <p className="mt-1 text-2xl font-semibold">{list.length}</p>
             </Card>
             <Card>
-              <p className="text-xs text-slate-500">Below 80%</p>
+              <p className="text-xs text-slate-500">Subjects below 80%</p>
               <p className="mt-1 text-2xl font-semibold text-red-600">{belowThreshold.length}</p>
             </Card>
             <Card>
@@ -92,9 +103,50 @@ export default function DashboardPage() {
             </Card>
           </div>
 
+          {hasStudentProfile && myAttendance.data && (
+            <Card>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle>My attendance</CardTitle>
+                <Link href="/student/calculators" className="text-sm font-medium text-blue-600 hover:underline">
+                  Bunk calculator →
+                </Link>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div>
+                  <p className="text-xs text-slate-500">Overall</p>
+                  <p className="mt-0.5 text-xl font-semibold">{myAttendance.data.overallPct.toFixed(1)}%</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Risk</p>
+                  <p className="mt-0.5">
+                    <Badge
+                      tone={
+                        myAttendance.data.riskLevel === "CRITICAL"
+                          ? "red"
+                          : myAttendance.data.riskLevel === "WARNING"
+                            ? "amber"
+                            : "green"
+                      }
+                    >
+                      {myAttendance.data.riskLevel}
+                    </Badge>
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Safe bunk hours</p>
+                  <p className="mt-0.5 text-xl font-semibold">{myAttendance.data.safeBunkHours}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Recovery hours</p>
+                  <p className="mt-0.5 text-xl font-semibold">{myAttendance.data.recoveryHours}</p>
+                </div>
+              </div>
+            </Card>
+          )}
+
           <div className="grid gap-4 lg:grid-cols-2">
             <Card>
-              <CardTitle>Subject attendance</CardTitle>
+              <CardTitle>Subject attendance (org-wide)</CardTitle>
               {subjects.isLoading ? (
                 <Spinner />
               ) : !list.length ? (
