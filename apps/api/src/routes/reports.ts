@@ -48,7 +48,15 @@ reports.get("/export", canManage, async (c) => {
           }
         : {}),
     },
-    include: { student: true, subject: true, section: true },
+    select: {
+      date: true,
+      hourNumber: true,
+      status: true,
+      markedAt: true,
+      student: { select: { rollNo: true, name: true } },
+      subject: { select: { name: true } },
+      section: { select: { name: true } },
+    },
     orderBy: [{ date: "asc" }, { hourNumber: "asc" }],
   });
 
@@ -122,6 +130,15 @@ reports.post("/import", canManage, async (c) => {
 
   const contextCache = new Map<string, any>(); // "date::hour" -> resolveMarkContext result | Error
 
+  // The section roster is small and constant for the whole request, so it is read
+  // once rather than once per CSV row — a 500-row backfill previously issued 500
+  // identical-shaped lookups. No status filter, matching the original findUnique.
+  const roster = await prisma.student.findMany({
+    where: { sectionId },
+    select: { id: true, rollNo: true },
+  });
+  const studentIdByRollNo = new Map<string, string>(roster.map((s: any) => [s.rollNo, s.id]));
+
   for (let i = 0; i < rawRows.length; i++) {
     const rowNum = i + 2;
     const parsed = importRowSchema.safeParse(rawRows[i]);
@@ -147,8 +164,8 @@ reports.post("/import", canManage, async (c) => {
       continue;
     }
 
-    const student = await prisma.student.findUnique({ where: { sectionId_rollNo: { sectionId, rollNo } } });
-    if (!student) {
+    const studentId = studentIdByRollNo.get(rollNo);
+    if (!studentId) {
       errors.push({ row: rowNum, message: `Roll number ${rollNo} not found in this section` });
       continue;
     }
@@ -156,7 +173,7 @@ reports.post("/import", canManage, async (c) => {
     validRows.push({
       date,
       hourNumber: hour,
-      studentId: student.id,
+      studentId,
       subjectId: ctx.timetableEntry.subjectId,
       status,
       countsForAttendance: ctx.countsForAttendance,

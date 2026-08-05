@@ -32,17 +32,22 @@ analytics.get("/heatmap", async (c) => {
   const user = c.get("user");
   await assertSemesterInOrg(prisma, query.semesterId, user.organizationId);
 
-  const records = await prisma.attendance.findMany({
+  // Grouped in SQL rather than scanning every row: the output is at most
+  // 7 days x 7 hours x statuses, instead of the semester's entire attendance table.
+  // dayOfWeek still has to be derived in JS — it isn't a stored column.
+  const grouped = await prisma.attendance.groupBy({
+    by: ["date", "hourNumber", "status"],
     where: { semesterId: query.semesterId, ...COUNTS_FOR_ATTENDANCE, ...dateFilter(query) },
+    _count: { _all: true },
   });
 
   const buckets = new Map<string, { present: number; total: number }>();
-  for (const r of records) {
-    const dow = r.date.getUTCDay();
-    const key = `${dow}-${r.hourNumber}`;
+  for (const g of grouped) {
+    const dow = g.date.getUTCDay();
+    const key = `${dow}-${g.hourNumber}`;
     const bucket = buckets.get(key) ?? { present: 0, total: 0 };
-    bucket.total += 1;
-    if (isPresentStatus(r.status)) bucket.present += 1;
+    bucket.total += g._count._all;
+    if (isPresentStatus(g.status)) bucket.present += g._count._all;
     buckets.set(key, bucket);
   }
 
@@ -65,22 +70,37 @@ analytics.get("/subject-comparison", async (c) => {
   const user = c.get("user");
   await assertSemesterInOrg(prisma, query.semesterId, user.organizationId);
 
-  const records = await prisma.attendance.findMany({
+  // Counts come back pre-aggregated (subjects x statuses rows), so the whole
+  // semester's attendance never crosses the wire. Names are a second small lookup
+  // rather than a join repeated on every row.
+  const grouped = await prisma.attendance.groupBy({
+    by: ["subjectId", "status"],
     where: { semesterId: query.semesterId, ...COUNTS_FOR_ATTENDANCE, ...dateFilter(query) },
-    include: { subject: true },
+    _count: { _all: true },
   });
 
-  const buckets = new Map<string, { name: string; present: number; total: number }>();
-  for (const r of records) {
-    const bucket = buckets.get(r.subjectId) ?? { name: r.subject.name, present: 0, total: 0 };
-    bucket.total += 1;
-    if (isPresentStatus(r.status)) bucket.present += 1;
-    buckets.set(r.subjectId, bucket);
+  const subjects = await prisma.subject.findMany({
+    where: { id: { in: [...new Set(grouped.map((g: any) => g.subjectId))] } },
+    select: { id: true, name: true },
+  });
+  const nameById = new Map<string, string>(subjects.map((s: any) => [s.id, s.name]));
+
+  const buckets = new Map<string, { present: number; total: number }>();
+  for (const g of grouped) {
+    const bucket = buckets.get(g.subjectId) ?? { present: 0, total: 0 };
+    bucket.total += g._count._all;
+    if (isPresentStatus(g.status)) bucket.present += g._count._all;
+    buckets.set(g.subjectId, bucket);
   }
 
   return c.json(
     [...buckets.entries()]
-      .map(([subjectId, v]) => ({ subjectId, name: v.name, pct: attendancePct(v.present, v.total), total: v.total }))
+      .map(([subjectId, v]) => ({
+        subjectId,
+        name: nameById.get(subjectId) ?? "",
+        pct: attendancePct(v.present, v.total),
+        total: v.total,
+      }))
       .sort((a, b) => a.pct - b.pct)
   );
 });
@@ -97,25 +117,46 @@ analytics.get("/bunk-leaderboard", async (c) => {
   const user = c.get("user");
   await assertSemesterInOrg(prisma, query.semesterId, user.organizationId);
 
-  const students = await prisma.student.findMany({
-    where: { section: { semesterId: query.semesterId } },
-    // BunkFlag carries its own date, so the range narrows the flags rather than the students.
-    include: { bunkFlags: { where: dateFilter(query) } },
+  // Rank on aggregated flag counts first. Students with no flags never enter the
+  // result at all, and only the surviving `limit` rows are fetched for their names —
+  // previously every student in the semester was loaded with all their flags to
+  // return five rows.
+  // BunkFlag carries its own date, so the range narrows the flags rather than the students.
+  const grouped = await prisma.bunkFlag.groupBy({
+    by: ["studentId", "flagType"],
+    where: { ...dateFilter(query), student: { section: { semesterId: query.semesterId } } },
+    _count: { _all: true },
   });
 
+  const counts = new Map<string, { total: number; single: number; mid: number }>();
+  for (const g of grouped) {
+    const entry = counts.get(g.studentId) ?? { total: 0, single: 0, mid: 0 };
+    entry.total += g._count._all;
+    if (g.flagType === "SINGLE_HOUR_SKIP") entry.single += g._count._all;
+    if (g.flagType === "MID_CLASS_BUNK") entry.mid += g._count._all;
+    counts.set(g.studentId, entry);
+  }
+
+  const top = [...counts.entries()]
+    .sort((a, b) => b[1].total - a[1].total)
+    .slice(0, query.limit);
+  if (top.length === 0) return c.json([]);
+
+  const students = await prisma.student.findMany({
+    where: { id: { in: top.map(([id]) => id) } },
+    select: { id: true, rollNo: true, name: true },
+  });
+  const byId = new Map<string, any>(students.map((s: any) => [s.id, s]));
+
   return c.json(
-    students
-      .map((s: any) => ({
-        studentId: s.id,
-        rollNo: s.rollNo,
-        name: s.name,
-        bunkFlagCount: s.bunkFlags.length,
-        singleHourSkips: s.bunkFlags.filter((f: any) => f.flagType === "SINGLE_HOUR_SKIP").length,
-        midClassBunks: s.bunkFlags.filter((f: any) => f.flagType === "MID_CLASS_BUNK").length,
-      }))
-      .filter((s: any) => s.bunkFlagCount > 0)
-      .sort((a: any, b: any) => b.bunkFlagCount - a.bunkFlagCount)
-      .slice(0, query.limit)
+    top.map(([studentId, v]) => ({
+      studentId,
+      rollNo: byId.get(studentId)?.rollNo ?? "",
+      name: byId.get(studentId)?.name ?? "",
+      bunkFlagCount: v.total,
+      singleHourSkips: v.single,
+      midClassBunks: v.mid,
+    }))
   );
 });
 
@@ -144,7 +185,12 @@ analytics.get("/daily-bunkers", async (c) => {
       ...(query.sectionId ? { sectionId: query.sectionId } : {}),
       ...COUNTS_FOR_ATTENDANCE,
     },
-    include: { student: true, subject: true },
+    select: {
+      studentId: true,
+      hourNumber: true,
+      student: { select: { rollNo: true, name: true } },
+      subject: { select: { name: true } },
+    },
     orderBy: [{ studentId: "asc" }, { hourNumber: "asc" }],
   });
 
@@ -179,31 +225,47 @@ analytics.get("/late-analytics", async (c) => {
   const user = c.get("user");
   await assertSemesterInOrg(prisma, query.semesterId, user.organizationId);
 
-  const lateRecords = await prisma.attendance.findMany({
-    where: { semesterId: query.semesterId, status: "LATE", ...dateFilter(query) },
-    include: { student: true },
-  });
+  // Two independent aggregations over the same filter, both grouped in SQL.
+  // The student join is deferred until after ranking, so only the top 10 are read.
+  const lateWhere = { semesterId: query.semesterId, status: "LATE", ...dateFilter(query) };
 
-  const byStudent = new Map<string, { rollNo: string; name: string; count: number }>();
+  const [byStudentGroups, byDayHourGroups] = await Promise.all([
+    prisma.attendance.groupBy({ by: ["studentId"], where: lateWhere, _count: { _all: true } }),
+    prisma.attendance.groupBy({ by: ["date", "hourNumber"], where: lateWhere, _count: { _all: true } }),
+  ]);
+
   const byDay = new Map<number, number>();
   const byHour = new Map<number, number>();
-
-  for (const r of lateRecords) {
-    const s = byStudent.get(r.studentId) ?? { rollNo: r.student.rollNo, name: r.student.name, count: 0 };
-    s.count += 1;
-    byStudent.set(r.studentId, s);
-
-    const dow = r.date.getUTCDay();
-    byDay.set(dow, (byDay.get(dow) ?? 0) + 1);
-    byHour.set(r.hourNumber, (byHour.get(r.hourNumber) ?? 0) + 1);
+  let totalLateMarks = 0;
+  for (const g of byDayHourGroups) {
+    const n = g._count._all;
+    totalLateMarks += n;
+    const dow = g.date.getUTCDay();
+    byDay.set(dow, (byDay.get(dow) ?? 0) + n);
+    byHour.set(g.hourNumber, (byHour.get(g.hourNumber) ?? 0) + n);
   }
 
-  const mostLateStudents = [...byStudent.values()].sort((a, b) => b.count - a.count).slice(0, 10);
+  const topLate = [...byStudentGroups]
+    .sort((a: any, b: any) => b._count._all - a._count._all)
+    .slice(0, 10);
+  const lateStudents = topLate.length
+    ? await prisma.student.findMany({
+        where: { id: { in: topLate.map((g: any) => g.studentId) } },
+        select: { id: true, rollNo: true, name: true },
+      })
+    : [];
+  const studentById = new Map<string, any>(lateStudents.map((s: any) => [s.id, s]));
+
+  const mostLateStudents = topLate.map((g: any) => ({
+    rollNo: studentById.get(g.studentId)?.rollNo ?? "",
+    name: studentById.get(g.studentId)?.name ?? "",
+    count: g._count._all,
+  }));
   const mostLateDay = [...byDay.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   const mostLateHour = [...byHour.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
   return c.json({
-    totalLateMarks: lateRecords.length,
+    totalLateMarks,
     mostLateStudents,
     mostLateDayOfWeek: mostLateDay,
     mostLateHour,
@@ -270,21 +332,61 @@ analytics.get("/subject-report", async (c) => {
     buckets.set(t.subjectId, b);
   }
 
+  const subjectIds = [...buckets.keys()];
+
+  // One pass over all subjects instead of two queries per subject. Grouping by
+  // (subject, date, hour, status) collapses the per-student rows while still
+  // preserving the distinct date+hour pairs that "marked hours" counts.
+  const grouped = await prisma.attendance.groupBy({
+    by: ["subjectId", "date", "hourNumber", "status"],
+    where: { semesterId: query.semesterId, subjectId: { in: subjectIds }, ...dateFilter(query) },
+    _count: { _all: true },
+  });
+
+  const stats = new Map<string, { present: number; total: number; hours: Set<string> }>();
+  for (const g of grouped) {
+    const s = stats.get(g.subjectId) ?? { present: 0, total: 0, hours: new Set<string>() };
+    s.total += g._count._all;
+    if (isPresentStatus(g.status)) s.present += g._count._all;
+    s.hours.add(`${g.date.toISOString().slice(0, 10)}-${g.hourNumber}`);
+    stats.set(g.subjectId, s);
+  }
+
+  // Corrections for every subject in one grouped query. The relation filter is
+  // unchanged, so the same audit rows are counted as before.
+  const correctionGroups = await prisma.auditLog.groupBy({
+    by: ["attendanceId"],
+    where: {
+      attendance: { semesterId: query.semesterId, subjectId: { in: subjectIds }, ...dateFilter(query) },
+    },
+    _count: { _all: true },
+  });
+  const correctedAttendanceIds = correctionGroups.map((g: any) => g.attendanceId);
+  const correctedRows = correctedAttendanceIds.length
+    ? await prisma.attendance.findMany({
+        where: { id: { in: correctedAttendanceIds } },
+        select: { id: true, subjectId: true },
+      })
+    : [];
+  const subjectByAttendanceId = new Map<string, string>(
+    correctedRows.map((r: any) => [r.id, r.subjectId])
+  );
+  const correctionsBySubject = new Map<string, number>();
+  for (const g of correctionGroups) {
+    const subjectId = subjectByAttendanceId.get(g.attendanceId);
+    if (!subjectId) continue;
+    correctionsBySubject.set(subjectId, (correctionsBySubject.get(subjectId) ?? 0) + g._count._all);
+  }
+
   const report = [];
   for (const b of buckets.values()) {
-    const records = await prisma.attendance.findMany({
-      where: { semesterId: query.semesterId, subjectId: b.subjectId, ...dateFilter(query) },
-      select: { status: true, date: true, hourNumber: true },
-    });
+    const s = stats.get(b.subjectId) ?? { present: 0, total: 0, hours: new Set<string>() };
 
     // Distinct date+hour pairs = hours actually marked, independent of class size.
-    const markedHours = new Set(records.map((r: any) => `${r.date.toISOString().slice(0, 10)}-${r.hourNumber}`)).size;
+    const markedHours = s.hours.size;
     const scheduledHours = b.weeklyHours * elapsedWeeks;
-    const present = records.filter((r: any) => isPresentStatus(r.status)).length;
-
-    const corrections = await prisma.auditLog.count({
-      where: { attendance: { semesterId: query.semesterId, subjectId: b.subjectId, ...dateFilter(query) } },
-    });
+    const present = s.present;
+    const corrections = correctionsBySubject.get(b.subjectId) ?? 0;
 
     report.push({
       subjectId: b.subjectId,
@@ -297,7 +399,7 @@ analytics.get("/subject-report", async (c) => {
       markedHours,
       // Capped: a rescheduled or extra class can push marked past the estimate.
       coveragePct: scheduledHours > 0 ? Math.min(100, (markedHours / scheduledHours) * 100) : 0,
-      attendancePct: attendancePct(present, records.length),
+      attendancePct: attendancePct(present, s.total),
       studentCount,
       corrections,
     });

@@ -55,31 +55,46 @@ studentPortal.get("/dashboard", async (c) => {
   const semester = student.section.semester;
   const minPct = semester.minAttendancePct;
 
-  const records = await prisma.attendance.findMany({
+  // Aggregated in SQL: the dashboard only needs counts per subject, never the
+  // individual rows. Subject names are one small lookup instead of a per-row join.
+  const grouped = await prisma.attendance.groupBy({
+    by: ["subjectId", "status"],
     where: { studentId: student.id, semesterId: semester.id, ...COUNTS_FOR_ATTENDANCE },
-    include: { subject: true },
+    _count: { _all: true },
   });
 
-  const total = records.length;
-  const present = records.filter((r: any) => isPresentStatus(r.status)).length;
+  let total = 0;
+  let present = 0;
+  let lateCount = 0;
+  for (const g of grouped) {
+    const n = g._count._all;
+    total += n;
+    if (isPresentStatus(g.status)) present += n;
+    if (g.status === "LATE") lateCount += n;
+  }
   const overallPct = attendancePct(present, total);
-  const lateCount = records.filter((r: any) => r.status === "LATE").length;
 
   const remainingHours = await estimateRemainingHours(prisma, student.sectionId, semester.endDate);
   const attendRate = total > 0 ? present / total : 1;
 
   const riskLevel = overallPct >= minPct ? "SAFE" : overallPct >= minPct - 5 ? "WARNING" : "CRITICAL";
 
-  const subjectMap = new Map<string, { name: string; present: number; total: number }>();
-  for (const r of records) {
-    const entry = subjectMap.get(r.subjectId) ?? { name: r.subject.name, present: 0, total: 0 };
-    entry.total += 1;
-    if (isPresentStatus(r.status)) entry.present += 1;
-    subjectMap.set(r.subjectId, entry);
+  const subjectMap = new Map<string, { present: number; total: number }>();
+  for (const g of grouped) {
+    const entry = subjectMap.get(g.subjectId) ?? { present: 0, total: 0 };
+    entry.total += g._count._all;
+    if (isPresentStatus(g.status)) entry.present += g._count._all;
+    subjectMap.set(g.subjectId, entry);
   }
+  const subjectNames = await prisma.subject.findMany({
+    where: { id: { in: [...subjectMap.keys()] } },
+    select: { id: true, name: true },
+  });
+  const subjectNameById = new Map<string, string>(subjectNames.map((s: any) => [s.id, s.name]));
+
   const subjectWise = [...subjectMap.entries()].map(([subjectId, v]) => ({
     subjectId,
-    name: v.name,
+    name: subjectNameById.get(subjectId) ?? "",
     pct: attendancePct(v.present, v.total),
     present: v.present,
     total: v.total,
@@ -88,7 +103,7 @@ studentPortal.get("/dashboard", async (c) => {
   const todayStr = new Date().toISOString().slice(0, 10);
   const today = await prisma.attendance.findMany({
     where: { studentId: student.id, date: new Date(`${todayStr}T00:00:00.000Z`) },
-    include: { subject: true },
+    select: { hourNumber: true, status: true, subject: { select: { name: true } } },
     orderBy: { hourNumber: "asc" },
   });
 
@@ -132,7 +147,13 @@ studentPortal.get("/timeline", async (c) => {
           }
         : {}),
     },
-    include: { subject: true },
+    select: {
+      date: true,
+      hourNumber: true,
+      status: true,
+      countsForAttendance: true,
+      subject: { select: { name: true } },
+    },
     orderBy: [{ date: "asc" }, { hourNumber: "asc" }],
   });
 
@@ -173,6 +194,9 @@ studentPortal.get("/analytics", async (c) => {
 
   const records = await prisma.attendance.findMany({
     where: { studentId: student.id, semesterId: student.section.semesterId, ...COUNTS_FOR_ATTENDANCE },
+    // Streaks are order-dependent, so the rows themselves are needed — but only
+    // three of their columns are.
+    select: { date: true, hourNumber: true, status: true },
     orderBy: [{ date: "asc" }, { hourNumber: "asc" }],
   });
 
@@ -307,16 +331,24 @@ studentPortal.post("/simulate", async (c) => {
 
   const student = await getOwnStudent(prisma, user.sub, body.semesterId);
 
-  const records = await prisma.attendance.findMany({
+  // The simulator only needs two integers, and it's fired repeatedly as the user
+  // adjusts inputs — so count in SQL rather than shipping every row to derive them.
+  const grouped = await prisma.attendance.groupBy({
+    by: ["status"],
     where: {
       studentId: student.id,
       semesterId: student.section.semesterId,
       ...(body.subjectId ? { subjectId: body.subjectId } : {}),
       ...COUNTS_FOR_ATTENDANCE,
     },
+    _count: { _all: true },
   });
-  const total = records.length;
-  const present = records.filter((r: any) => isPresentStatus(r.status)).length;
+  let total = 0;
+  let present = 0;
+  for (const g of grouped) {
+    total += g._count._all;
+    if (isPresentStatus(g.status)) present += g._count._all;
+  }
   const currentPct = attendancePct(present, total);
 
   if (body.mode === "target") {
@@ -367,7 +399,12 @@ studentPortal.get("/subject-planner", async (c) => {
 
   const timetables = await prisma.timetable.findMany({
     where: { sectionId: student.sectionId },
-    include: { subject: true },
+    select: {
+      subjectId: true,
+      dayOfWeek: true,
+      durationHours: true,
+      subject: { select: { id: true, code: true, name: true, countsForAttendance: true } },
+    },
   });
 
   // Non-working days are skipped when projecting forward, so the dates land on real classes.
@@ -379,17 +416,18 @@ studentPortal.get("/subject-planner", async (c) => {
     calendarDays.map((d: any) => d.date.toISOString().slice(0, 10))
   );
 
-  const records = await prisma.attendance.findMany({
+  const grouped = await prisma.attendance.groupBy({
+    by: ["subjectId", "status"],
     where: { studentId: student.id, semesterId: semester.id, ...COUNTS_FOR_ATTENDANCE },
-    select: { subjectId: true, status: true },
+    _count: { _all: true },
   });
 
   const standing = new Map<string, { present: number; total: number }>();
-  for (const r of records) {
-    const s = standing.get(r.subjectId) ?? { present: 0, total: 0 };
-    s.total += 1;
-    if (isPresentStatus(r.status)) s.present += 1;
-    standing.set(r.subjectId, s);
+  for (const g of grouped) {
+    const s = standing.get(g.subjectId) ?? { present: 0, total: 0 };
+    s.total += g._count._all;
+    if (isPresentStatus(g.status)) s.present += g._count._all;
+    standing.set(g.subjectId, s);
   }
 
   // Project from tomorrow — today's classes may already be marked.

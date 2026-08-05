@@ -40,11 +40,25 @@ export async function resolveMarkContext(
 
   const dayOfWeek = dayOfWeekOf(dateStr);
 
+  // Both lookups depend only on sectionId + date/dayOfWeek, which are known here,
+  // so they run together rather than serially. This function is on the hot path
+  // for every mark read, mark write, and each distinct date+hour during import.
+  //
   // A one-off override for this exact date wins over the recurring weekly pattern.
-  const dayOverrides = await prisma.timetableOverride.findMany({
-    where: { sectionId, date },
-    include: { subject: true, faculty: true },
-  });
+  //
+  // A multi-hour lab is stored as ONE row at its first period, so the requested hour
+  // may fall inside a block rather than starting one — find the entry that covers it.
+  const [dayOverrides, dayEntries] = await Promise.all([
+    prisma.timetableOverride.findMany({
+      where: { sectionId, date },
+      include: { subject: true, faculty: true },
+    }),
+    prisma.timetable.findMany({
+      where: { sectionId, dayOfWeek },
+      include: { subject: true, faculty: true },
+    }),
+  ]);
+
   const overrideEntry = dayOverrides.find(
     (o: any) => hourNumber >= o.hourNumber && hourNumber < o.hourNumber + o.durationHours
   );
@@ -55,12 +69,6 @@ export async function resolveMarkContext(
     });
   }
 
-  // A multi-hour lab is stored as ONE row at its first period, so the requested hour
-  // may fall inside a block rather than starting one — find the entry that covers it.
-  const dayEntries = await prisma.timetable.findMany({
-    where: { sectionId, dayOfWeek },
-    include: { subject: true, faculty: true },
-  });
   const weeklyEntry = dayEntries.find(
     (e: any) => hourNumber >= e.hourNumber && hourNumber < e.hourNumber + e.durationHours
   );

@@ -29,18 +29,23 @@ attendance.get("/mark", canMark, async (c) => {
 
   const studentList = await prisma.student.findMany({
     where: { sectionId: query.sectionId, status: "ACTIVE" },
+    select: { id: true, rollNo: true, name: true },
     orderBy: { rollNo: "asc" },
   });
 
   // Read from the block's first hour: every covered hour is written together, so
   // they always agree, and this keeps one row per student in the response.
+  //
+  // Scoped by sectionId rather than an IN list of every student id — same rows,
+  // but it lets the (sectionId, date) index do the work.
   const existing = await prisma.attendance.findMany({
     where: {
       date,
       hourNumber: timetableEntry.hourNumber,
       subjectId: timetableEntry.subjectId,
-      studentId: { in: studentList.map((s: any) => s.id) },
+      sectionId: query.sectionId,
     },
+    select: { id: true, studentId: true, status: true, isLocked: true },
   });
   const byStudent = new Map(existing.map((a: any) => [a.studentId, a]));
 
