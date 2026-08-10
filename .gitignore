@@ -23,3 +23,7 @@ Thumbs.db
 .open-next/
 apps/web/tsconfig.tsbuildinfo
 apps/api/tsconfig.tsbuildinfo
+
+# Database exports — contain bcrypt password hashes and student PII.
+# Kept locally for migration/rollback; never committed.
+backups/

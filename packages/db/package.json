@@ -4,6 +4,13 @@
   "private": true,
   "main": "src/index.ts",
   "types": "src/index.ts",
+  "//exports": "Subpaths keep the Supabase transport importable without pulling in the Prisma/D1 barrel. At final cutover the '.' entry goes away with Prisma; these stay.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./supabase": "./src/supabase.ts",
+    "./queries": "./src/queries.ts",
+    "./repos/*": "./src/repos/*.ts"
+  },
   "scripts": {
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
@@ -14,10 +21,9 @@
   },
   "dependencies": {
     "@prisma/adapter-d1": "^5.22.0",
-    "@prisma/adapter-pg": "^5.20.0",
     "@prisma/client": "^5.20.0",
-    "bcryptjs": "^2.4.3",
-    "pg": "^8.13.1"
+    "@supabase/supabase-js": "^2.112.2",
+    "bcryptjs": "^2.4.3"
   },
   "devDependencies": {
     "prisma": "^5.20.0",

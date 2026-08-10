@@ -9,17 +9,17 @@ compatibility_flags = ["nodejs_compat"]
 crons = ["0 20 * * *"] # 20:00 UTC nightly (adjust to your org's local midnight)
 
 # No R2: report exports are generated and streamed in the same request, so the
-# only storage this Worker needs is D1.
+# only storage this Worker needs is the database.
 
-# D1 (SQLite). Create with:  npx wrangler d1 create attendance-db
-# then paste the printed database_id below.
+# D1 — the live datastore. A Hyperdrive/PrismaPg path to Supabase Postgres was
+# trialled here and removed: it proxies Postgres over a pooled TCP connection, and the
+# pooled sockets went stale between requests, surfacing as intermittent 500s. The
+# Supabase migration continues over HTTPS via @supabase/supabase-js instead, which
+# holds no connection state. D1 stays live and unmodified until that cutover.
 [[d1_databases]]
 binding = "DB"
 database_name = "attendance-db"
 database_id = "cd4bd7b1-9b4b-4f5d-8efb-5264db2d7e53"
-# Flat .sql files, as wrangler expects. Prisma writes its own nested copy under
-# prisma/migrations/; regenerate this one with:
-#   npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script
 migrations_dir = "../../packages/db/prisma/d1-migrations"
 
 # Secrets (set via `wrangler secret put`, never committed):

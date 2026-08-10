@@ -10,6 +10,7 @@
   "dependencies": {
     "@attendance/db": "*",
     "@hono/node-server": "^2.0.12",
+    "@supabase/supabase-js": "^2.112.2",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.6.1",
     "hono": "^4.6.9",

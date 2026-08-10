@@ -1,4 +1,15 @@
-// Prisma schema — PostgreSQL (Neon serverless), edge-compatible via @prisma/adapter-neon
+// Prisma schema — Cloudflare D1 (SQLite), the live datastore.
+//
+// A Supabase migration is in progress, but it does not run through Prisma: the Worker
+// will reach Supabase over HTTPS via @supabase/supabase-js, so Prisma stays bound to D1
+// until cutover and is not part of the Postgres path. The Postgres DDL for Supabase
+// lives in backups/d1-cutover-postgres.sql, converted from the D1 dump rather than
+// generated from this file — that export keeps snake_case table names with quoted
+// camelCase columns, which is the casing the Supabase queries must match.
+//
+// String-union columns (status, role, dayType, ...) are deliberate rather than native
+// enums: values are validated by Zod at the API boundary, and they carry over to
+// Postgres as TEXT unchanged.
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["driverAdapters"]
