@@ -3,29 +3,10 @@ import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { ZodError } from "zod";
 import type { AppEnv } from "./types";
-import { prismaMiddleware } from "./middleware/prisma";
 import { supabaseMiddleware } from "./middleware/supabase";
 import { jwtMiddleware } from "./middleware/auth";
 import auth from "./routes/auth";
 import departments from "./routes/departments";
-import departmentsSupabase from "./routes/departmentsSupabase";
-import subjectsSupabase from "./routes/subjectsSupabase";
-import sectionsSupabase from "./routes/sectionsSupabase";
-import facultySupabase from "./routes/facultySupabase";
-import academicYearsSupabase from "./routes/academicYearsSupabase";
-import semestersSupabase from "./routes/semestersSupabase";
-import studentsSupabase from "./routes/studentsSupabase";
-import usersSupabase from "./routes/usersSupabase";
-import notificationsSupabase from "./routes/notificationsSupabase";
-import settingsSupabase from "./routes/settingsSupabase";
-import auditLogsSupabase from "./routes/auditLogsSupabase";
-import hourConfigSupabase from "./routes/hourConfigSupabase";
-import calendarSupabase from "./routes/calendarSupabase";
-import timetableSupabase from "./routes/timetableSupabase";
-import attendanceSupabase from "./routes/attendanceSupabase";
-import studentPortalSupabase from "./routes/studentPortalSupabase";
-import analyticsSupabase from "./routes/analyticsSupabase";
-import reportsSupabase from "./routes/reportsSupabase";
 import sections from "./routes/sections";
 import subjects from "./routes/subjects";
 import timetable from "./routes/timetable";
@@ -43,10 +24,8 @@ import hourConfig from "./routes/hourConfig";
 import settings from "./routes/settings";
 import reports from "./routes/reports";
 import notifications from "./routes/notifications";
-import { getPrismaClient } from "@attendance/db";
-import { runNightlyJob } from "./lib/cron";
-import { runNightlyJob as runNightlyJobSupabase } from "./lib/cronSupabase";
 import { getSupabase } from "@attendance/db/supabase";
+import { runNightlyJob } from "./lib/cron";
 
 const app = new Hono<AppEnv>();
 
@@ -59,9 +38,9 @@ app.use(
   })
 );
 
-app.use("*", prismaMiddleware);
-// No-op unless SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set, so production —
-// which sets neither — keeps serving every route from D1.
+// Every route reads its data through this client. It is built per request: the
+// client wraps fetch and holds no socket, so there is no connection state to pool
+// or to go stale between invocations.
 app.use("*", supabaseMiddleware);
 
 app.onError((err, c) => {
@@ -84,30 +63,6 @@ app.use("/api/*", jwtMiddleware);
 app.get("/api/health", (c) => c.json({ ok: true }));
 
 app.route("/api/departments", departments);
-
-// Migration preview: the same endpoints served from Supabase over HTTPS, mounted in
-// parallel so both paths can be exercised with one JWT against one dataset. Returns
-// 500 ("Supabase is not configured") wherever the Supabase vars are absent, which is
-// everywhere except the preview configuration. Retired at cutover, when these
-// replace their /api counterparts.
-app.route("/api/v2/departments", departmentsSupabase);
-app.route("/api/v2/subjects", subjectsSupabase);
-app.route("/api/v2/sections", sectionsSupabase);
-app.route("/api/v2/faculty", facultySupabase);
-app.route("/api/v2/academic-years", academicYearsSupabase);
-app.route("/api/v2/semesters", semestersSupabase);
-app.route("/api/v2/students", studentsSupabase);
-app.route("/api/v2/users", usersSupabase);
-app.route("/api/v2/notifications", notificationsSupabase);
-app.route("/api/v2/settings", settingsSupabase);
-app.route("/api/v2/audit-logs", auditLogsSupabase);
-app.route("/api/v2/hour-config", hourConfigSupabase);
-app.route("/api/v2/calendar", calendarSupabase);
-app.route("/api/v2/timetable", timetableSupabase);
-app.route("/api/v2/attendance", attendanceSupabase);
-app.route("/api/v2/student", studentPortalSupabase);
-app.route("/api/v2/admin/analytics", analyticsSupabase);
-app.route("/api/v2/reports", reportsSupabase);
 app.route("/api/sections", sections);
 app.route("/api/subjects", subjects);
 app.route("/api/timetable", timetable);
@@ -129,33 +84,13 @@ app.route("/api/notifications", notifications);
 export default {
   fetch: app.fetch,
 
-  /**
-   * Nightly job. Runs against Supabase when the Worker is configured for it, and
-   * falls back to D1 otherwise.
-   *
-   * The fallback is deliberate here, and is the one place in the migration where a
-   * fallback is correct: unlike a request handler, nothing observes a cron failure
-   * until the next morning's missing alerts. Production sets no Supabase vars, so it
-   * keeps running the D1 job unchanged; the preview configuration runs the Supabase
-   * one. At cutover the D1 branch goes away with the rest of Prisma.
-   */
   async scheduled(_event: ScheduledEvent, env: AppEnv["Bindings"], ctx: ExecutionContext) {
-    if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
-      const db = getSupabase({
-        SUPABASE_URL: env.SUPABASE_URL,
-        SUPABASE_SERVICE_ROLE_KEY: env.SUPABASE_SERVICE_ROLE_KEY,
-      });
-      ctx.waitUntil(
-        runNightlyJobSupabase(db).then((result) => {
-          console.log("Nightly cron completed (Supabase)", JSON.stringify(result));
-        })
-      );
-      return;
-    }
-
-    const prisma = getPrismaClient({ DB: env.DB });
+    const db = getSupabase({
+      SUPABASE_URL: env.SUPABASE_URL,
+      SUPABASE_SERVICE_ROLE_KEY: env.SUPABASE_SERVICE_ROLE_KEY,
+    });
     ctx.waitUntil(
-      runNightlyJob(prisma).then((result) => {
+      runNightlyJob(db).then((result) => {
         console.log("Nightly cron completed", JSON.stringify(result));
       })
     );

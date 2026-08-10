@@ -1,10 +1,9 @@
 // Supabase HTTP transport for the Cloudflare Worker.
 //
 // Architecture: Worker -> @supabase/supabase-js -> HTTPS -> Supabase -> PostgreSQL.
-// Deliberately NOT Prisma, NOT Hyperdrive, NOT pg.Pool. A pooled TCP path was trialled
-// and removed: Workers cannot hold a connection between requests, so pooled sockets
-// went stale and surfaced as intermittent 500s. PostgREST over HTTPS is stateless, so
-// there is no connection to go stale.
+// PostgREST over HTTPS, not a database driver. A pooled TCP path was trialled and
+// removed: Workers cannot hold a connection between requests, so pooled sockets went
+// stale and surfaced as intermittent 500s. HTTPS is stateless — nothing to go stale.
 //
 // Security model (C-3): every table in `public` has RLS enabled + forced with no
 // policies, and anon/authenticated have no grants. The Worker connects with the

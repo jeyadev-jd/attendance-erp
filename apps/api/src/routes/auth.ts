@@ -6,12 +6,18 @@ import { signJwt } from "../lib/jwt";
 import { generateOtp, hashOtp } from "../lib/otp";
 import { sendMail, otpEmailTemplate } from "../lib/mailer";
 import { loginSchema, requestOtpSchema, changePasswordSchema } from "../schemas/auth";
+import { requireSupabase } from "../middleware/supabase";
+import * as repo from "@attendance/db/repos/auth";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 const MAX_OTP_ATTEMPTS = 5;
 
 const auth = new Hono<AppEnv>();
 
-async function issueTokenFor(c: any, user: { id: string; organizationId: string; role: any; mustChangePassword: boolean }) {
+async function issueTokenFor(
+  c: any,
+  user: { id: string; organizationId: string; role: any; mustChangePassword: boolean }
+) {
   const expirySeconds = Number(c.env.JWT_EXPIRY_SECONDS);
   const now = Math.floor(Date.now() / 1000);
   return signJwt(
@@ -27,21 +33,18 @@ async function issueTokenFor(c: any, user: { id: string; organizationId: string;
   );
 }
 
-async function emailOtp(c: any, email: string, userId: string) {
-  const prisma = c.get("prisma");
+async function emailOtp(c: any, db: SupabaseClient, email: string, userId: string) {
   const otp = generateOtp();
   const ttlMinutes = Number(c.env.OTP_TTL_MINUTES);
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      otpHash: await hashOtp(otp),
-      otpExpiresAt: new Date(Date.now() + ttlMinutes * 60_000),
-      otpAttempts: 0,
-    },
-  });
+  await repo.setOtp(db, userId, await hashOtp(otp), new Date(Date.now() + ttlMinutes * 60_000));
   const { subject, text, html } = otpEmailTemplate(otp, ttlMinutes);
   await sendMail(
-    { host: c.env.SMTP_HOST, port: Number(c.env.SMTP_PORT), user: c.env.SMTP_USER, pass: c.env.SMTP_PASS },
+    {
+      host: c.env.SMTP_HOST,
+      port: Number(c.env.SMTP_PORT),
+      user: c.env.SMTP_USER,
+      pass: c.env.SMTP_PASS,
+    },
     { to: email, subject, text, html }
   );
 }
@@ -58,16 +61,16 @@ async function emailOtp(c: any, email: string, userId: string) {
  */
 auth.post("/login", async (c) => {
   const body = loginSchema.parse(await c.req.json());
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
 
-  const user = await prisma.user.findFirst({ where: { email: body.email, isActive: true } });
+  const user = await repo.findActiveByEmail(db, body.email);
   if (!user) throw new HTTPException(401, { message: "Invalid credentials" });
 
   const valid = await bcrypt.compare(body.password, user.passwordHash);
   if (!valid) throw new HTTPException(401, { message: "Invalid credentials" });
 
   if (user.mustChangePassword) {
-    await emailOtp(c, user.email, user.id);
+    await emailOtp(c, db, user.email, user.id);
     return c.json({ requiresOtp: true, requiresPasswordChange: true, email: user.email });
   }
 
@@ -78,10 +81,10 @@ auth.post("/login", async (c) => {
 /** Resend OTP — used for first-login setup or password reset ("forgot password"). */
 auth.post("/request-otp", async (c) => {
   const body = requestOtpSchema.parse(await c.req.json());
-  const prisma = c.get("prisma");
-  const user = await prisma.user.findFirst({ where: { email: body.email, isActive: true } });
+  const db = requireSupabase(c);
+  const user = await repo.findActiveByEmail(db, body.email);
   // Always respond 200 to avoid leaking which emails are registered.
-  if (user) await emailOtp(c, user.email, user.id);
+  if (user) await emailOtp(c, db, user.email, user.id);
   return c.json({ sent: true });
 });
 
@@ -91,36 +94,28 @@ auth.post("/request-otp", async (c) => {
  */
 auth.post("/complete-first-login", async (c) => {
   const body = changePasswordSchema.parse(await c.req.json());
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
 
-  const user = await prisma.user.findFirst({ where: { email: body.email, isActive: true } });
+  const user = await repo.findActiveByEmail(db, body.email);
   if (!user || !user.otpHash || !user.otpExpiresAt) {
     throw new HTTPException(400, { message: "No OTP request found — request a new one" });
   }
   if (user.otpAttempts >= MAX_OTP_ATTEMPTS) {
     throw new HTTPException(429, { message: "Too many attempts — request a new OTP" });
   }
-  if (user.otpExpiresAt.getTime() < Date.now()) {
+  if (new Date(user.otpExpiresAt).getTime() < Date.now()) {
     throw new HTTPException(400, { message: "OTP expired — request a new one" });
   }
 
   const providedHash = await hashOtp(body.otp);
   if (providedHash !== user.otpHash) {
-    await prisma.user.update({ where: { id: user.id }, data: { otpAttempts: { increment: 1 } } });
+    // The count comes from the row just read, so the increment costs no extra query.
+    await repo.bumpOtpAttempts(db, user.id, user.otpAttempts + 1);
     throw new HTTPException(400, { message: "Incorrect OTP" });
   }
 
   const passwordHash = await bcrypt.hash(body.newPassword, 10);
-  const updated = await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      passwordHash,
-      mustChangePassword: false,
-      otpHash: null,
-      otpExpiresAt: null,
-      otpAttempts: 0,
-    },
-  });
+  const updated = await repo.completePasswordChange(db, user.id, passwordHash);
 
   const token = await issueTokenFor(c, updated);
   return c.json({ token, mustChangePassword: false });

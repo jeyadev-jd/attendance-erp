@@ -1,9 +1,17 @@
+// Hour config, served from Supabase over HTTPS.
+//
+// Mounted at /api/v2/hour-config alongside the Prisma/D1 router.
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { AppEnv } from "../types";
 import { roleGuard } from "../middleware/roleGuard";
-import { assertSemesterInOrg, assertSemesterWritable } from "../lib/semesterGuard";
+import { requireSupabase } from "../middleware/supabase";
+import {
+  assertSemesterInOrg,
+  assertSemesterWritable,
+} from "../lib/semesterGuard";
 import { setHourConfigSchema, bulkSetDaySchema } from "../schemas/hourConfig";
+import * as repo from "@attendance/db/repos/hourConfig";
 
 const hourConfig = new Hono<AppEnv>();
 const canManage = roleGuard("SUPER_ADMIN", "ADMIN");
@@ -12,15 +20,15 @@ const canManage = roleGuard("SUPER_ADMIN", "ADMIN");
 hourConfig.get("/", async (c) => {
   const semesterId = c.req.query("semesterId");
   if (!semesterId) throw new HTTPException(400, { message: "semesterId query param is required" });
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
-  await assertSemesterInOrg(prisma, semesterId, user.organizationId);
+  await assertSemesterInOrg(db, semesterId, user.organizationId);
 
-  const configs = await prisma.hourConfig.findMany({
-    where: { semesterId },
-    orderBy: [{ dayOfWeek: "asc" }, { hourNumber: "asc" }],
-  });
+  const configs = await repo.listBySemester(db, semesterId);
 
+  // Grouping stays in the Worker: the rows are already ordered and bounded by the
+  // semester's hour layout (tens of rows, not thousands), and the response shape is
+  // a keyed object that SQL would have to build as JSON anyway.
   const grouped: Record<number, typeof configs> = {};
   for (const cfg of configs) {
     (grouped[cfg.dayOfWeek] ??= []).push(cfg);
@@ -31,22 +39,11 @@ hourConfig.get("/", async (c) => {
 /** Upserts a single hour's start/end time for one day of week. */
 hourConfig.post("/", canManage, async (c) => {
   const body = setHourConfigSchema.parse(await c.req.json());
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
-  await assertSemesterWritable(prisma, body.semesterId, user.organizationId);
+  await assertSemesterWritable(db, body.semesterId, user.organizationId);
 
-  const config = await prisma.hourConfig.upsert({
-    where: {
-      semesterId_dayOfWeek_hourNumber: {
-        semesterId: body.semesterId,
-        dayOfWeek: body.dayOfWeek,
-        hourNumber: body.hourNumber,
-      },
-    },
-    update: { startTime: body.startTime, endTime: body.endTime },
-    create: body,
-  });
-  return c.json(config);
+  return c.json(await repo.upsert(db, body));
 });
 
 /**
@@ -56,37 +53,23 @@ hourConfig.post("/", canManage, async (c) => {
  */
 hourConfig.post("/day", canManage, async (c) => {
   const body = bulkSetDaySchema.parse(await c.req.json());
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
-  await assertSemesterWritable(prisma, body.semesterId, user.organizationId);
+  await assertSemesterWritable(db, body.semesterId, user.organizationId);
 
-  await prisma.$transaction([
-    prisma.hourConfig.deleteMany({ where: { semesterId: body.semesterId, dayOfWeek: body.dayOfWeek } }),
-    prisma.hourConfig.createMany({
-      data: body.hours.map((h) => ({
-        semesterId: body.semesterId,
-        dayOfWeek: body.dayOfWeek,
-        hourNumber: h.hourNumber,
-        startTime: h.startTime,
-        endTime: h.endTime,
-      })),
-    }),
-  ]);
-
-  return c.json({ dayOfWeek: body.dayOfWeek, hoursSet: body.hours.length });
+  const hoursSet = await repo.replaceDay(db, body.semesterId, body.dayOfWeek, body.hours);
+  return c.json({ dayOfWeek: body.dayOfWeek, hoursSet });
 });
 
 hourConfig.delete("/:id", canManage, async (c) => {
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
   const id = c.req.param("id");
 
-  const existing = await prisma.hourConfig.findFirst({
-    where: { id, semester: { academicYear: { organizationId: user.organizationId } } },
-  });
+  const existing = await repo.findInOrg(db, id, user.organizationId);
   if (!existing) throw new HTTPException(404, { message: "Hour config not found" });
 
-  await prisma.hourConfig.delete({ where: { id } });
+  await repo.remove(db, id);
   return c.json({ deleted: true });
 });
 

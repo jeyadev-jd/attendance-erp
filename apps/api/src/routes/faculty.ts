@@ -1,36 +1,19 @@
+// Faculty directory, served from Supabase over HTTPS.
+//
+// Mounted at /api/v2/faculty alongside the Prisma/D1 router at /api/faculty.
+// Read-only, as the original is: faculty records are created through user
+// onboarding, not here.
 import { Hono } from "hono";
 import type { AppEnv } from "../types";
+import { requireSupabase } from "../middleware/supabase";
+import * as repo from "@attendance/db/repos/faculty";
 
 const faculty = new Hono<AppEnv>();
 
-/**
- * Read-only faculty directory, org-scoped. Exists so the timetable builder and
- * report filters can offer a faculty picker; faculty records themselves are
- * created through user onboarding, not here.
- */
 faculty.get("/", async (c) => {
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
-  const departmentId = c.req.query("departmentId");
-
-  const list = await prisma.faculty.findMany({
-    where: {
-      ...(departmentId ? { departmentId } : {}),
-      department: { organizationId: user.organizationId },
-    },
-    include: { user: { select: { email: true } } },
-    orderBy: { name: "asc" },
-  });
-
-  return c.json(
-    list.map((f: any) => ({
-      id: f.id,
-      employeeId: f.employeeId,
-      departmentId: f.departmentId,
-      name: f.name,
-      email: f.user?.email ?? "",
-    }))
-  );
+  return c.json(await repo.listByOrg(db, user.organizationId, c.req.query("departmentId")));
 });
 
 export default faculty;

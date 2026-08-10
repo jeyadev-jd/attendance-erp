@@ -1,19 +1,43 @@
+// Attendance, served from Supabase over HTTPS.
+//
+// Mounted at /api/v2/attendance alongside the Prisma/D1 router.
+// Logic, guards, status codes and response shapes unchanged.
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { AppEnv } from "../types";
 import { roleGuard } from "../middleware/roleGuard";
-import { getSettings } from "../lib/settings";
-import { dayOfWeekOf, resolveMarkContext } from "../lib/attendanceContext";
+import { requireSupabase } from "../middleware/supabase";
+import { resolveMarkContext } from "../lib/attendanceContext";
 import {
   markQuerySchema,
   bulkMarkSchema,
   editAttendanceSchema,
   lockAttendanceSchema,
-  auditLogQuerySchema,
 } from "../schemas/attendance";
+import * as repo from "@attendance/db/repos/attendance";
+import * as settingsRepo from "@attendance/db/repos/settings";
+import { findSectionInOrg } from "@attendance/db/queries";
+import { many } from "@attendance/db/supabase";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 const attendance = new Hono<AppEnv>();
 const canMark = roleGuard("SUPER_ADMIN", "ADMIN", "CLASS_ADMIN");
+
+/** Documented defaults when an org has not configured Settings. Mirrors lib/settings.ts. */
+const SETTINGS_DEFAULTS = { editWindowHours: 24 };
+
+/** Active roster for a section, ordered by roll number. Bounded by class size. */
+async function activeRoster(db: SupabaseClient, sectionId: string) {
+  return many<{ id: string; rollNo: string; name: string }>(
+    await db
+      .from("students")
+      .select("id,rollNo,name")
+      .eq("sectionId", sectionId)
+      .eq("status", "ACTIVE")
+      .order("rollNo", { ascending: true }),
+    "attendance.activeRoster"
+  );
+}
 
 attendance.get("/mark", canMark, async (c) => {
   const query = markQuerySchema.parse({
@@ -21,33 +45,27 @@ attendance.get("/mark", canMark, async (c) => {
     sectionId: c.req.query("sectionId"),
     hourNumber: c.req.query("hourNumber"),
   });
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
 
   const { timetableEntry, date, coveredHours, isOverride, overrideReason, countsForAttendance } =
-    await resolveMarkContext(prisma, user.organizationId, query.sectionId, query.date, query.hourNumber);
+    await resolveMarkContext(db, user.organizationId, query.sectionId, query.date, query.hourNumber);
 
-  const studentList = await prisma.student.findMany({
-    where: { sectionId: query.sectionId, status: "ACTIVE" },
-    select: { id: true, rollNo: true, name: true },
-    orderBy: { rollNo: "asc" },
-  });
-
-  // Read from the block's first hour: every covered hour is written together, so
-  // they always agree, and this keeps one row per student in the response.
+  // Roster and existing marks are independent, so they run together.
   //
-  // Scoped by sectionId rather than an IN list of every student id — same rows,
-  // but it lets the (sectionId, date) index do the work.
-  const existing = await prisma.attendance.findMany({
-    where: {
+  // Existing marks are read from the block's FIRST hour: every covered hour is
+  // written together, so they always agree, and this keeps one row per student.
+  const [studentList, existing] = await Promise.all([
+    activeRoster(db, query.sectionId),
+    repo.findForMarkSheet(
+      db,
       date,
-      hourNumber: timetableEntry.hourNumber,
-      subjectId: timetableEntry.subjectId,
-      sectionId: query.sectionId,
-    },
-    select: { id: true, studentId: true, status: true, isLocked: true },
-  });
-  const byStudent = new Map(existing.map((a: any) => [a.studentId, a]));
+      timetableEntry.hourNumber,
+      timetableEntry.subjectId as string,
+      query.sectionId
+    ),
+  ]);
+  const byStudent = new Map(existing.map((a) => [a.studentId, a]));
 
   return c.json({
     subject: timetableEntry.subject,
@@ -59,7 +77,7 @@ attendance.get("/mark", canMark, async (c) => {
     countsForAttendance,
     isOverride,
     overrideReason,
-    students: studentList.map((s: any) => {
+    students: studentList.map((s) => {
       const record = byStudent.get(s.id);
       return {
         studentId: s.id,
@@ -73,14 +91,14 @@ attendance.get("/mark", canMark, async (c) => {
   });
 });
 
-/** Bulk upsert in one transaction. Records for already-locked attendance are skipped, not overwritten. */
+/** Bulk upsert. Records for already-locked attendance are skipped, not overwritten. */
 attendance.post("/mark", canMark, async (c) => {
   const body = bulkMarkSchema.parse(await c.req.json());
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
 
   const { timetableEntry, date, coveredHours, countsForAttendance } = await resolveMarkContext(
-    prisma,
+    db,
     user.organizationId,
     body.sectionId,
     body.date,
@@ -88,54 +106,33 @@ attendance.post("/mark", canMark, async (c) => {
   );
 
   // A lock on any hour of the block locks the whole block for that student.
-  const studentIds = body.records.map((r) => r.studentId);
-  const alreadyLocked = await prisma.attendance.findMany({
-    where: {
-      date,
-      hourNumber: { in: coveredHours },
-      subjectId: timetableEntry.subjectId,
-      studentId: { in: studentIds },
-      isLocked: true,
-    },
-    select: { studentId: true },
-  });
-  const lockedSet = new Set(alreadyLocked.map((a: any) => a.studentId));
+  const lockedSet = await repo.findLockedStudents(
+    db,
+    date,
+    coveredHours,
+    timetableEntry.subjectId as string,
+    body.records.map((r) => r.studentId)
+  );
 
   const toWrite = body.records.filter((r) => !lockedSet.has(r.studentId));
   const skipped = body.records.filter((r) => lockedSet.has(r.studentId)).map((r) => r.studentId);
 
   // One mark, but a record per hour the block covers — so a 2-hour lab is marked
-  // once and still counts as 2 hours toward attendance.
-  const ops = toWrite.flatMap((r) =>
-    coveredHours.map((hour) =>
-      prisma.attendance.upsert({
-        where: {
-          date_hourNumber_studentId_subjectId: {
-            date,
-            hourNumber: hour,
-            studentId: r.studentId,
-            subjectId: timetableEntry.subjectId,
-          },
-        },
-        update: { status: r.status, countsForAttendance, markedById: user.sub, markedAt: new Date() },
-        create: {
-          date,
-          hourNumber: hour,
-          semesterId: timetableEntry.semesterId,
-          subjectId: timetableEntry.subjectId,
-          sectionId: body.sectionId,
-          studentId: r.studentId,
-          status: r.status,
-          countsForAttendance,
-          markedById: user.sub,
-        },
-      })
-    )
-  );
+  // once and still counts as 2 hours toward attendance. Written as ONE batched
+  // upsert rather than one request per (student, hour).
+  const written = await repo.upsertMarks(db, {
+    date,
+    coveredHours,
+    semesterId: timetableEntry.semesterId,
+    subjectId: timetableEntry.subjectId as string,
+    sectionId: body.sectionId,
+    countsForAttendance,
+    markedById: user.sub,
+    records: toWrite,
+  });
 
-  const written = ops.length > 0 ? await prisma.$transaction(ops) : [];
   return c.json({
-    written: written.length,
+    written,
     students: toWrite.length,
     hoursPerStudent: coveredHours.length,
     skippedLocked: skipped,
@@ -149,13 +146,11 @@ attendance.post("/mark", canMark, async (c) => {
  */
 attendance.put("/:id", canMark, async (c) => {
   const body = editAttendanceSchema.parse(await c.req.json());
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
   const id = c.req.param("id");
 
-  const record = await prisma.attendance.findFirst({
-    where: { id, section: { semester: { academicYear: { organizationId: user.organizationId } } } },
-  });
+  const record = await repo.findInOrg(db, id, user.organizationId);
   if (!record) throw new HTTPException(404, { message: "Attendance record not found" });
 
   if (record.isLocked && user.role !== "SUPER_ADMIN") {
@@ -163,51 +158,40 @@ attendance.put("/:id", canMark, async (c) => {
   }
 
   if (user.role !== "SUPER_ADMIN") {
-    const settings = await getSettings(prisma, user.organizationId);
-    const windowMs = settings.editWindowHours * 60 * 60 * 1000;
-    if (Date.now() - record.markedAt.getTime() > windowMs) {
+    const settings = await settingsRepo.findByOrg(db, user.organizationId);
+    const editWindowHours = settings?.editWindowHours ?? SETTINGS_DEFAULTS.editWindowHours;
+    const windowMs = editWindowHours * 60 * 60 * 1000;
+    if (Date.now() - new Date(record.markedAt).getTime() > windowMs) {
       throw new HTTPException(403, { message: "Edit window has expired for this record" });
     }
   }
 
-  const [updated] = await prisma.$transaction([
-    prisma.attendance.update({ where: { id }, data: { status: body.status } }),
-    prisma.auditLog.create({
-      data: {
-        attendanceId: id,
-        oldStatus: record.status,
-        newStatus: body.status,
-        reason: body.reason,
-        changedById: user.sub,
-      },
-    }),
-  ]);
-
-  return c.json(updated);
+  return c.json(
+    await repo.updateWithAudit(db, id, {
+      oldStatus: record.status,
+      newStatus: body.status,
+      reason: body.reason,
+      changedById: user.sub,
+    })
+  );
 });
 
 /** Locks attendance for a date+section (optionally a single hour). Locked records become immutable. */
 attendance.post("/lock", roleGuard("SUPER_ADMIN", "ADMIN"), async (c) => {
   const body = lockAttendanceSchema.parse(await c.req.json());
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
 
-  const section = await prisma.section.findFirst({
-    where: { id: body.sectionId, semester: { academicYear: { organizationId: user.organizationId } } },
-  });
+  const section = await findSectionInOrg(db, body.sectionId, user.organizationId);
   if (!section) throw new HTTPException(404, { message: "Section not found" });
 
-  const date = new Date(`${body.date}T00:00:00.000Z`);
-  const result = await prisma.attendance.updateMany({
-    where: {
-      sectionId: body.sectionId,
-      date,
-      ...(body.hourNumber ? { hourNumber: body.hourNumber } : {}),
-    },
-    data: { isLocked: true },
-  });
-
-  return c.json({ locked: result.count });
+  const locked = await repo.lockRecords(
+    db,
+    body.sectionId,
+    new Date(`${body.date}T00:00:00.000Z`),
+    body.hourNumber
+  );
+  return c.json({ locked });
 });
 
 export default attendance;

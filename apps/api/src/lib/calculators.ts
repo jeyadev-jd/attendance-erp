@@ -1,4 +1,4 @@
-import type { AttendanceStatus } from "@attendance/db";
+import type { AttendanceStatus } from "@attendance/db/types";
 
 // Statuses that count toward "present" for percentage purposes.
 export const PRESENT_STATUSES: AttendanceStatus[] = ["PRESENT", "LATE", "VERY_LATE", "MEDICAL", "OD"];

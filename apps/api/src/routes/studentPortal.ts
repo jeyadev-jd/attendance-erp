@@ -1,7 +1,16 @@
+// Student portal, served from Supabase over HTTPS.
+//
+// Mounted at /api/v2/student alongside the Prisma/D1 router at /api/student.
+// Logic, guards, status codes and response shapes unchanged.
+//
+// The pure helpers below (futureClassDates, crossingDate, isoWeekKey) are copied
+// verbatim from the Prisma route: they are date arithmetic over already-fetched
+// data, so nothing about them changes with the database.
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { AppEnv } from "../types";
 import { roleGuard } from "../middleware/roleGuard";
+import { requireSupabase } from "../middleware/supabase";
 import {
   isPresentStatus,
   attendancePct,
@@ -9,7 +18,6 @@ import {
   recoveryHours,
   bunkSimulator,
   projectedEndPct,
-  COUNTS_FOR_ATTENDANCE,
 } from "../lib/calculators";
 import {
   semesterQuerySchema,
@@ -17,6 +25,8 @@ import {
   simulateSchema,
   subjectPlannerQuerySchema,
 } from "../schemas/studentPortal";
+import * as repo from "@attendance/db/repos/studentPortal";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 const studentPortal = new Hono<AppEnv>();
 // Open to every role, not just STUDENT: class admins are students in their own batch and
@@ -26,21 +36,21 @@ const studentPortal = new Hono<AppEnv>();
 studentPortal.use("*", roleGuard("SUPER_ADMIN", "ADMIN", "CLASS_ADMIN", "FACULTY", "STUDENT"));
 
 /** Resolves the caller's own Student profile — for the requested semester, or their currently ACTIVE one. */
-async function getOwnStudent(prisma: any, userId: string, semesterId?: string) {
-  const student = await prisma.student.findFirst({
-    where: {
-      userId,
-      section: semesterId ? { semesterId } : { semester: { status: "ACTIVE" } },
-    },
-    include: { section: { include: { semester: true } } },
-  });
-  if (!student) throw new HTTPException(404, { message: "No student record found for this semester" });
+async function getOwnStudent(db: SupabaseClient, userId: string, semesterId?: string) {
+  const student = await repo.findOwnStudent(db, userId, semesterId);
+  if (!student) {
+    throw new HTTPException(404, { message: "No student record found for this semester" });
+  }
   return student;
 }
 
 /** Estimated remaining teaching hours: (weekly timetable hours for the section) × remaining whole weeks. */
-async function estimateRemainingHours(prisma: any, sectionId: string, semesterEndDate: Date) {
-  const weeklyCount = await prisma.timetable.count({ where: { sectionId } });
+async function estimateRemainingHours(
+  db: SupabaseClient,
+  sectionId: string,
+  semesterEndDate: Date
+) {
+  const weeklyCount = await repo.weeklyHourCount(db, sectionId);
   const msPerWeek = 7 * 24 * 60 * 60 * 1000;
   const weeksRemaining = Math.max(0, Math.ceil((semesterEndDate.getTime() - Date.now()) / msPerWeek));
   return weeklyCount * weeksRemaining;
@@ -48,64 +58,47 @@ async function estimateRemainingHours(prisma: any, sectionId: string, semesterEn
 
 studentPortal.get("/dashboard", async (c) => {
   const query = semesterQuerySchema.parse({ semesterId: c.req.query("semesterId") });
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
 
-  const student = await getOwnStudent(prisma, user.sub, query.semesterId);
+  const student = await getOwnStudent(db, user.sub, query.semesterId);
   const semester = student.section.semester;
   const minPct = semester.minAttendancePct;
 
   // Aggregated in SQL: the dashboard only needs counts per subject, never the
   // individual rows. Subject names are one small lookup instead of a per-row join.
-  const grouped = await prisma.attendance.groupBy({
-    by: ["subjectId", "status"],
-    where: { studentId: student.id, semesterId: semester.id, ...COUNTS_FOR_ATTENDANCE },
-    _count: { _all: true },
-  });
+  const totals = await repo.subjectTotals(db, student.id, semester.id);
 
   let total = 0;
   let present = 0;
   let lateCount = 0;
-  for (const g of grouped) {
-    const n = g._count._all;
-    total += n;
-    if (isPresentStatus(g.status)) present += n;
-    if (g.status === "LATE") lateCount += n;
+  for (const t of totals) {
+    total += t.total;
+    present += t.present;
+    lateCount += t.lateCount;
   }
   const overallPct = attendancePct(present, total);
 
-  const remainingHours = await estimateRemainingHours(prisma, student.sectionId, semester.endDate);
+  const remainingHours = await estimateRemainingHours(
+    db,
+    student.sectionId,
+    new Date(semester.endDate)
+  );
   const attendRate = total > 0 ? present / total : 1;
 
   const riskLevel = overallPct >= minPct ? "SAFE" : overallPct >= minPct - 5 ? "WARNING" : "CRITICAL";
 
-  const subjectMap = new Map<string, { present: number; total: number }>();
-  for (const g of grouped) {
-    const entry = subjectMap.get(g.subjectId) ?? { present: 0, total: 0 };
-    entry.total += g._count._all;
-    if (isPresentStatus(g.status)) entry.present += g._count._all;
-    subjectMap.set(g.subjectId, entry);
-  }
-  const subjectNames = await prisma.subject.findMany({
-    where: { id: { in: [...subjectMap.keys()] } },
-    select: { id: true, name: true },
-  });
-  const subjectNameById = new Map<string, string>(subjectNames.map((s: any) => [s.id, s.name]));
-
-  const subjectWise = [...subjectMap.entries()].map(([subjectId, v]) => ({
-    subjectId,
-    name: subjectNameById.get(subjectId) ?? "",
-    pct: attendancePct(v.present, v.total),
-    present: v.present,
-    total: v.total,
+  const nameById = await repo.subjectNames(db, totals.map((t) => t.subjectId));
+  const subjectWise = totals.map((t) => ({
+    subjectId: t.subjectId,
+    name: nameById.get(t.subjectId) ?? "",
+    pct: attendancePct(t.present, t.total),
+    present: t.present,
+    total: t.total,
   }));
 
   const todayStr = new Date().toISOString().slice(0, 10);
-  const today = await prisma.attendance.findMany({
-    where: { studentId: student.id, date: new Date(`${todayStr}T00:00:00.000Z`) },
-    select: { hourNumber: true, status: true, subject: { select: { name: true } } },
-    orderBy: { hourNumber: "asc" },
-  });
+  const today = await repo.todayRecords(db, student.id, new Date(`${todayStr}T00:00:00.000Z`));
 
   return c.json({
     overallPct,
@@ -129,40 +122,18 @@ studentPortal.get("/timeline", async (c) => {
     from: c.req.query("from"),
     to: c.req.query("to"),
   });
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
 
-  const student = await getOwnStudent(prisma, user.sub, query.semesterId);
-
-  const records = await prisma.attendance.findMany({
-    where: {
-      studentId: student.id,
-      semesterId: student.section.semesterId,
-      ...(query.from || query.to
-        ? {
-            date: {
-              ...(query.from ? { gte: new Date(`${query.from}T00:00:00.000Z`) } : {}),
-              ...(query.to ? { lte: new Date(`${query.to}T00:00:00.000Z`) } : {}),
-            },
-          }
-        : {}),
-    },
-    select: {
-      date: true,
-      hourNumber: true,
-      status: true,
-      countsForAttendance: true,
-      subject: { select: { name: true } },
-    },
-    orderBy: [{ date: "asc" }, { hourNumber: "asc" }],
-  });
+  const student = await getOwnStudent(db, user.sub, query.semesterId);
+  const records = await repo.timeline(db, student.id, student.section.semesterId, query);
 
   // The timeline is a history view, so it lists every marked hour — including
   // non-counting slots like mentor-mentee — but dayPct only counts the ones that
   // actually affect the percentage.
   const byDate = new Map<string, any[]>();
   for (const r of records) {
-    const key = r.date.toISOString().slice(0, 10);
+    const key = new Date(r.date).toISOString().slice(0, 10);
     const list = byDate.get(key) ?? [];
     list.push({
       hourNumber: r.hourNumber,
@@ -187,18 +158,15 @@ studentPortal.get("/timeline", async (c) => {
 
 studentPortal.get("/analytics", async (c) => {
   const query = semesterQuerySchema.parse({ semesterId: c.req.query("semesterId") });
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
 
-  const student = await getOwnStudent(prisma, user.sub, query.semesterId);
+  const student = await getOwnStudent(db, user.sub, query.semesterId);
 
-  const records = await prisma.attendance.findMany({
-    where: { studentId: student.id, semesterId: student.section.semesterId, ...COUNTS_FOR_ATTENDANCE },
-    // Streaks are order-dependent, so the rows themselves are needed — but only
-    // three of their columns are.
-    select: { date: true, hourNumber: true, status: true },
-    orderBy: [{ date: "asc" }, { hourNumber: "asc" }],
-  });
+  // Streaks are order-dependent, so the rows themselves are needed — but only
+  // three of their columns are, and the read is paged so a long semester is not
+  // silently truncated at PostgREST's 1000-row default.
+  const records = await repo.analyticsRecords(db, student.id, student.section.semesterId);
 
   // Day-of-week pattern
   const dayBuckets = new Map<number, { present: number; total: number }>();
@@ -209,10 +177,11 @@ studentPortal.get("/analytics", async (c) => {
 
   let currentStreak = 0;
   let longestStreak = 0;
-  let lateByDay = new Map<number, number>();
+  const lateByDay = new Map<number, number>();
 
   for (const r of records) {
-    const dow = r.date.getUTCDay();
+    const d = new Date(r.date);
+    const dow = d.getUTCDay();
     const day = dayBuckets.get(dow) ?? { present: 0, total: 0 };
     day.total += 1;
     if (isPresentStatus(r.status)) day.present += 1;
@@ -223,7 +192,7 @@ studentPortal.get("/analytics", async (c) => {
     if (isPresentStatus(r.status)) hour.present += 1;
     hourBuckets.set(r.hourNumber, hour);
 
-    const weekKey = isoWeekKey(r.date);
+    const weekKey = isoWeekKey(d);
     const week = weekBuckets.get(weekKey) ?? { present: 0, total: 0 };
     week.total += 1;
     if (isPresentStatus(r.status)) week.present += 1;
@@ -239,15 +208,21 @@ studentPortal.get("/analytics", async (c) => {
     if (r.status === "LATE") lateByDay.set(dow, (lateByDay.get(dow) ?? 0) + 1);
   }
 
-  const lateCount = records.filter((r: any) => r.status === "LATE").length;
+  const lateCount = records.filter((r) => r.status === "LATE").length;
   const mostLateDay = [...lateByDay.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
   return c.json({
     trend: [...weekBuckets.entries()]
       .sort()
       .map(([week, v]) => ({ week, pct: attendancePct(v.present, v.total) })),
-    dayWise: [...dayBuckets.entries()].map(([dow, v]) => ({ dayOfWeek: dow, pct: attendancePct(v.present, v.total) })),
-    hourWise: [...hourBuckets.entries()].map(([hr, v]) => ({ hourNumber: hr, pct: attendancePct(v.present, v.total) })),
+    dayWise: [...dayBuckets.entries()].map(([dow, v]) => ({
+      dayOfWeek: dow,
+      pct: attendancePct(v.present, v.total),
+    })),
+    hourWise: [...hourBuckets.entries()].map(([hr, v]) => ({
+      hourNumber: hr,
+      pct: attendancePct(v.present, v.total),
+    })),
     streaks: { current: currentStreak, longest: longestStreak },
     lateStats: { totalLate: lateCount, mostLateDayOfWeek: mostLateDay },
   });
@@ -326,28 +301,24 @@ function isoWeekKey(date: Date): string {
  */
 studentPortal.post("/simulate", async (c) => {
   const body = simulateSchema.parse(await c.req.json());
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
 
-  const student = await getOwnStudent(prisma, user.sub, body.semesterId);
+  const student = await getOwnStudent(db, user.sub, body.semesterId);
 
   // The simulator only needs two integers, and it's fired repeatedly as the user
   // adjusts inputs — so count in SQL rather than shipping every row to derive them.
-  const grouped = await prisma.attendance.groupBy({
-    by: ["status"],
-    where: {
-      studentId: student.id,
-      semesterId: student.section.semesterId,
-      ...(body.subjectId ? { subjectId: body.subjectId } : {}),
-      ...COUNTS_FOR_ATTENDANCE,
-    },
-    _count: { _all: true },
-  });
+  const totals = await repo.subjectTotals(
+    db,
+    student.id,
+    student.section.semesterId,
+    body.subjectId
+  );
   let total = 0;
   let present = 0;
-  for (const g of grouped) {
-    total += g._count._all;
-    if (isPresentStatus(g.status)) present += g._count._all;
+  for (const t of totals) {
+    total += t.total;
+    present += t.present;
   }
   const currentPct = attendancePct(present, total);
 
@@ -379,74 +350,51 @@ studentPortal.post("/simulate", async (c) => {
 
 /**
  * One row per timetabled subject: current standing, safe-bunk/recovery counts, and the
- * projected dates the student would cross the target — the date they'd fall below if they
- * keep skipping, and the date they'd recover if they attend everything from now on.
- *
- * Subjects come from the section's timetable, so a subject with no attendance yet still
- * appears (with an empty current standing) rather than silently missing from the planner.
+ * projected dates the student would cross the target.
  */
 studentPortal.get("/subject-planner", async (c) => {
   const query = subjectPlannerQuerySchema.parse({
     semesterId: c.req.query("semesterId"),
     targetPct: c.req.query("targetPct"),
   });
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
 
-  const student = await getOwnStudent(prisma, user.sub, query.semesterId);
+  const student = await getOwnStudent(db, user.sub, query.semesterId);
   const semester = student.section.semester;
   const targetPct = query.targetPct ?? semester.minAttendancePct;
 
-  const timetables = await prisma.timetable.findMany({
-    where: { sectionId: student.sectionId },
-    select: {
-      subjectId: true,
-      dayOfWeek: true,
-      durationHours: true,
-      subject: { select: { id: true, code: true, name: true, countsForAttendance: true } },
-    },
-  });
+  // Three independent reads; run together rather than serially.
+  const [slots, nonWorking, totals] = await Promise.all([
+    repo.plannerSlots(db, student.sectionId),
+    repo.nonWorkingDates(db, semester.id),
+    repo.subjectTotals(db, student.id, semester.id),
+  ]);
 
-  // Non-working days are skipped when projecting forward, so the dates land on real classes.
-  const calendarDays = await prisma.calendarDay.findMany({
-    where: { semesterId: semester.id, dayType: { not: "WORKING" } },
-    select: { date: true },
-  });
-  const nonWorkingDates = new Set(
-    calendarDays.map((d: any) => d.date.toISOString().slice(0, 10))
-  );
-
-  const grouped = await prisma.attendance.groupBy({
-    by: ["subjectId", "status"],
-    where: { studentId: student.id, semesterId: semester.id, ...COUNTS_FOR_ATTENDANCE },
-    _count: { _all: true },
-  });
-
-  const standing = new Map<string, { present: number; total: number }>();
-  for (const g of grouped) {
-    const s = standing.get(g.subjectId) ?? { present: 0, total: 0 };
-    s.total += g._count._all;
-    if (isPresentStatus(g.status)) s.present += g._count._all;
-    standing.set(g.subjectId, s);
-  }
+  const standing = new Map(totals.map((t) => [t.subjectId, t]));
 
   // Project from tomorrow — today's classes may already be marked.
   const from = new Date();
   from.setUTCDate(from.getUTCDate() + 1);
-  const until = semester.endDate;
+  const until = new Date(semester.endDate);
 
-  const bySubject = new Map<string, { subject: any; slots: { dayOfWeek: number; durationHours: number }[] }>();
-  for (const t of timetables) {
+  const bySubject = new Map<
+    string,
+    { subject: { id: string; code: string; name: string }; slots: { dayOfWeek: number; durationHours: number }[] }
+  >();
+  for (const t of slots) {
     if (!t.subject.countsForAttendance) continue;
     const entry = bySubject.get(t.subjectId) ?? { subject: t.subject, slots: [] };
     entry.slots.push({ dayOfWeek: t.dayOfWeek, durationHours: t.durationHours });
     bySubject.set(t.subjectId, entry);
   }
 
-  const rows = [...bySubject.values()].map(({ subject, slots }) => {
-    const { present, total } = standing.get(subject.id) ?? { present: 0, total: 0 };
+  const rows = [...bySubject.values()].map(({ subject, slots: subjectSlots }) => {
+    const s = standing.get(subject.id);
+    const present = s?.present ?? 0;
+    const total = s?.total ?? 0;
     const currentPct = attendancePct(present, total);
-    const upcoming = futureClassDates(slots, nonWorkingDates, from, until);
+    const upcoming = futureClassDates(subjectSlots, nonWorking, from, until);
 
     return {
       subjectId: subject.id,
@@ -468,7 +416,11 @@ studentPortal.get("/subject-planner", async (c) => {
   });
 
   rows.sort((a, b) => a.currentPct - b.currentPct);
-  return c.json({ targetPct, semesterEndDate: until.toISOString().slice(0, 10), subjects: rows });
+  return c.json({
+    targetPct,
+    semesterEndDate: until.toISOString().slice(0, 10),
+    subjects: rows,
+  });
 });
 
 export default studentPortal;

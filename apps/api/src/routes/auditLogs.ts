@@ -1,6 +1,11 @@
+// Audit logs, served from Supabase over HTTPS.
+//
+// Mounted at /api/v2/audit-logs alongside the Prisma/D1 router.
 import { Hono } from "hono";
 import type { AppEnv } from "../types";
+import { requireSupabase } from "../middleware/supabase";
 import { auditLogQuerySchema } from "../schemas/attendance";
+import * as repo from "@attendance/db/repos/auditLogs";
 
 const auditLogs = new Hono<AppEnv>();
 
@@ -12,34 +17,12 @@ auditLogs.get("/", async (c) => {
     dateFrom: c.req.query("dateFrom"),
     dateTo: c.req.query("dateTo"),
   });
-  const prisma = c.get("prisma");
+  const db = requireSupabase(c);
   const user = c.get("user");
 
-  const logs = await prisma.auditLog.findMany({
-    where: {
-      attendance: {
-        section: { semester: { academicYear: { organizationId: user.organizationId } } },
-        ...(query.studentId ? { studentId: query.studentId } : {}),
-        ...(query.sectionId ? { sectionId: query.sectionId } : {}),
-        ...(query.subjectId ? { subjectId: query.subjectId } : {}),
-        ...(query.dateFrom || query.dateTo
-          ? {
-              date: {
-                ...(query.dateFrom ? { gte: new Date(`${query.dateFrom}T00:00:00.000Z`) } : {}),
-                ...(query.dateTo ? { lte: new Date(`${query.dateTo}T00:00:00.000Z`) } : {}),
-              },
-            }
-          : {}),
-      },
-    },
-    include: {
-      attendance: { include: { student: true, subject: true, section: true } },
-      changedBy: { select: { name: true, email: true } },
-    },
-    orderBy: { changedAt: "desc" },
-  });
-
-  return c.json(logs);
+  // Every filter runs in PostgreSQL against the joined attendance row, so the
+  // Worker receives only the logs the caller asked for.
+  return c.json(await repo.listByOrg(db, user.organizationId, query));
 });
 
 export default auditLogs;

@@ -2,13 +2,12 @@
   "name": "@attendance/db",
   "version": "0.0.1",
   "private": true,
-  "main": "src/index.ts",
-  "types": "src/index.ts",
   "//exports": "Subpaths keep the Supabase transport importable without pulling in the Prisma/D1 barrel. At final cutover the '.' entry goes away with Prisma; these stay.",
   "exports": {
-    ".": "./src/index.ts",
     "./supabase": "./src/supabase.ts",
     "./queries": "./src/queries.ts",
+    "./types": "./src/types.ts",
+    "./ids": "./src/ids.ts",
     "./repos/*": "./src/repos/*.ts"
   },
   "scripts": {
@@ -20,8 +19,7 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@prisma/adapter-d1": "^5.22.0",
-    "@prisma/client": "^5.20.0",
+    "@prisma/client": "^5.22.0",
     "@supabase/supabase-js": "^2.112.2",
     "bcryptjs": "^2.4.3"
   },
