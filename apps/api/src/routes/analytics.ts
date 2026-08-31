@@ -197,8 +197,10 @@ analytics.get("/subject-report", async (c) => {
  * Every active student in one section with their attendance standing — the batch
  * roll-up staff and admins use instead of opening students one at a time.
  *
- * Plain attendance only: present/absent/late counts and a percentage. No safe-bunk
- * or recovery projection, so this stays available to FACULTY.
+ * One row per (student, subject) — the client pivots it into a grid so a student
+ * who is fine overall but failing one subject is visible, which an overall total
+ * hides. Plain attendance only: no safe-bunk or recovery projection, so this stays
+ * available to FACULTY.
  */
 analytics.get("/batch-overview", async (c) => {
   const query = batchOverviewQuerySchema.parse({
@@ -214,7 +216,7 @@ analytics.get("/batch-overview", async (c) => {
   const section = await findSectionInOrg(db, query.sectionId, user.organizationId);
   if (!section) throw new HTTPException(404, { message: "Section not found" });
 
-  return c.json(await repo.batchOverview(db, query.sectionId, user.organizationId, query));
+  return c.json(await repo.batchBySubject(db, query.sectionId, user.organizationId, query));
 });
 
 export default analytics;

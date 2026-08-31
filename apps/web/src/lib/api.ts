@@ -492,21 +492,22 @@ export type ManagedUser = {
   hasStudentProfile: boolean;
 };
 
-export type BatchAttendanceRow = {
+export type BatchSubjectRow = {
   studentId: string;
   rollNo: string;
-  name: string;
+  studentName: string;
+  subjectId: string;
+  subjectCode: string;
+  subjectName: string;
   present: number;
   total: number;
-  lateCount: number;
-  absentCount: number;
   pct: number;
 };
 
 export const batchApi = {
-  /** Every active student in a section with their standing. Aggregated server-side. */
-  overview: (token: string, sectionId: string, range?: { dateFrom?: string; dateTo?: string }) =>
-    request<BatchAttendanceRow[]>(
+  /** One row per (student, subject); the page pivots it into a grid. */
+  bySubject: (token: string, sectionId: string, range?: { dateFrom?: string; dateTo?: string }) =>
+    request<BatchSubjectRow[]>(
       `/api/admin/analytics/batch-overview${qs({ sectionId, ...range })}`,
       {},
       token

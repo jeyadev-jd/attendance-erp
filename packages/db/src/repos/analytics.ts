@@ -170,49 +170,52 @@ export async function subjectReport(
   );
 }
 
-export type BatchAttendanceRow = {
+export type BatchSubjectRow = {
   studentId: string;
   rollNo: string;
-  name: string;
+  studentName: string;
+  subjectId: string;
+  subjectCode: string;
+  subjectName: string;
   present: number;
   total: number;
-  lateCount: number;
-  absentCount: number;
   pct: number;
 };
 
 /**
- * Every active student in a section with their attendance standing.
+ * Every active student in a section, broken down per subject.
  *
- * Aggregated in PostgreSQL: a section's semester runs to thousands of attendance
- * rows, past PostgREST's 1000-row default, so folding it in the Worker would both
- * truncate silently and burn CPU. One row per student comes back instead.
+ * Returns long rows — one per (student, subject) — which the UI pivots into a grid.
+ * Pivoting in SQL would need a fixed column list or dynamic SQL, since the subject
+ * set varies per section; emitting long rows keeps the function simple and the
+ * payload small (roughly students x subjects short rows).
  *
- * Students with no marked attendance are included at 0% rather than dropped, so the
- * table matches the roster.
+ * Aggregated in PostgreSQL rather than the Worker: a section's semester runs to
+ * thousands of attendance rows, past PostgREST's 1000-row default.
  */
-export async function batchOverview(
+export async function batchBySubject(
   db: SupabaseClient,
   sectionId: string,
   organizationId: string,
   range: DateRange
-): Promise<BatchAttendanceRow[]> {
-  const rows = many<BatchAttendanceRow>(
-    await db.rpc("batch_attendance_overview", {
+): Promise<BatchSubjectRow[]> {
+  const rows = many<BatchSubjectRow>(
+    await db.rpc("batch_attendance_by_subject", {
       p_section_id: sectionId,
       p_organization_id: organizationId,
       ...rangeArgs(range),
     }),
-    "analytics.batchOverview"
+    "analytics.batchBySubject"
   );
   return rows.map((r) => ({
     studentId: r.studentId,
     rollNo: r.rollNo,
-    name: r.name,
+    studentName: r.studentName,
+    subjectId: r.subjectId,
+    subjectCode: r.subjectCode,
+    subjectName: r.subjectName,
     present: Number(r.present),
     total: Number(r.total),
-    lateCount: Number(r.lateCount),
-    absentCount: Number(r.absentCount),
     pct: Number(r.pct),
   }));
 }

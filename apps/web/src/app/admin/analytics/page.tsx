@@ -59,7 +59,7 @@ export default function AdminAnalyticsPage() {
 
   const batch = useQuery({
     queryKey: ["batch-overview", batchSectionId, rangeKey],
-    queryFn: () => batchApi.overview(token!, batchSectionId, range),
+    queryFn: () => batchApi.bySubject(token!, batchSectionId, range),
     enabled: !!token && !!batchSectionId,
   });
 
@@ -176,10 +176,10 @@ export default function AdminAnalyticsPage() {
             </p>
           </Card>
           <Card>
-            <CardTitle>Batch attendance</CardTitle>
+            <CardTitle>Batch attendance — subject-wise</CardTitle>
             <p className="mt-1 text-xs text-slate-500">
-              Every student in a section with their standing, worst first. Counts are aggregated in
-              the database, so the size of the section does not change what this costs.
+              Every student against every subject they are marked in. An overall total hides a
+              student who is fine on average but failing one subject, which is what this is for.
             </p>
             <div className="mt-3 max-w-sm">
               <Field label="Section">
@@ -198,41 +198,68 @@ export default function AdminAnalyticsPage() {
             ) : batch.isLoading ? (
               <Spinner />
             ) : !batch.data?.length ? (
-              <EmptyState message="No active students in this section." />
+              <EmptyState message="No attendance marked for this section yet." />
             ) : (
-              <TableScroll>
-                <table className="mt-3 w-full min-w-[34rem] text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-xs text-slate-500">
-                      <th className="py-2 pr-2">Roll no</th>
-                      <th className="py-2 pr-2">Name</th>
-                      <th className="py-2 pr-2 text-right">Present</th>
-                      <th className="py-2 pr-2 text-right">Total</th>
-                      <th className="py-2 pr-2 text-right">Late</th>
-                      <th className="py-2 pr-2 text-right">Absent</th>
-                      <th className="py-2 text-right">%</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {batch.data.map((r) => (
-                      <tr key={r.studentId} className="border-b last:border-0">
-                        <td className="py-2 pr-2 font-medium">{r.rollNo}</td>
-                        <td className="py-2 pr-2">{r.name}</td>
-                        <td className="py-2 pr-2 text-right tabular-nums">{r.present}</td>
-                        <td className="py-2 pr-2 text-right tabular-nums">{r.total}</td>
-                        <td className="py-2 pr-2 text-right tabular-nums">{r.lateCount}</td>
-                        <td className="py-2 pr-2 text-right tabular-nums">{r.absentCount}</td>
-                        <td className="py-2 text-right">
-                          {/* 75% is the warning band below the usual 80% minimum. */}
-                          <Badge tone={r.pct >= 80 ? "green" : r.pct >= 75 ? "amber" : "red"}>
-                            {r.pct.toFixed(1)}%
-                          </Badge>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </TableScroll>
+              (() => {
+                // Pivot the long rows the API returns into a students x subjects grid.
+                // Done here rather than in SQL because the subject set varies per
+                // section, so a SQL pivot would need dynamic column names.
+                const subjects = [...new Map(batch.data.map((r) => [r.subjectId, r])).values()].sort(
+                  (a, b) => a.subjectName.localeCompare(b.subjectName)
+                );
+                const students = [...new Map(batch.data.map((r) => [r.studentId, r])).values()].sort(
+                  (a, b) => a.rollNo.localeCompare(b.rollNo)
+                );
+                const cell = new Map(batch.data.map((r) => [`${r.studentId}:${r.subjectId}`, r]));
+
+                return (
+                  <TableScroll>
+                    <table className="mt-3 w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-xs text-slate-500">
+                          <th className="sticky left-0 z-10 bg-white py-2 pr-3">Roll no</th>
+                          <th className="py-2 pr-3">Name</th>
+                          {subjects.map((s) => (
+                            <th
+                              key={s.subjectId}
+                              className="whitespace-nowrap py-2 pr-3 text-right font-medium"
+                              title={s.subjectCode}
+                            >
+                              {s.subjectName}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {students.map((st) => (
+                          <tr key={st.studentId} className="border-b last:border-0">
+                            <td className="sticky left-0 z-10 bg-white py-2 pr-3 font-medium">
+                              {st.rollNo}
+                            </td>
+                            <td className="whitespace-nowrap py-2 pr-3">{st.studentName}</td>
+                            {subjects.map((s) => {
+                              const c = cell.get(`${st.studentId}:${s.subjectId}`);
+                              return (
+                                <td key={s.subjectId} className="py-2 pr-3 text-right">
+                                  {/* Blank, not 0% — no marks in a subject is not the
+                                      same as being absent from all of them. */}
+                                  {!c ? (
+                                    <span className="text-slate-300">—</span>
+                                  ) : (
+                                    <Badge tone={c.pct >= 80 ? "green" : c.pct >= 75 ? "amber" : "red"}>
+                                      {c.pct.toFixed(0)}%
+                                    </Badge>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </TableScroll>
+                );
+              })()
             )}
           </Card>
           {canSeeBunkTools && (
