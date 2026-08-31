@@ -4,6 +4,15 @@ export const semesterQuerySchema = z.object({
   semesterId: z.string().cuid().optional(),
 });
 
+/**
+ * Dashboard query. `date` selects which day the timeline card shows; omitting it
+ * keeps the previous behaviour of showing today, so existing callers are unaffected.
+ */
+export const dashboardQuerySchema = z.object({
+  semesterId: z.string().cuid().optional(),
+  date: z.string().date().optional(),
+});
+
 export const timelineQuerySchema = z.object({
   semesterId: z.string().cuid().optional(),
   from: z.string().date().optional(),

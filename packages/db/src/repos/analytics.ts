@@ -169,3 +169,50 @@ export async function subjectReport(
     "analytics.subjectReport"
   );
 }
+
+export type BatchAttendanceRow = {
+  studentId: string;
+  rollNo: string;
+  name: string;
+  present: number;
+  total: number;
+  lateCount: number;
+  absentCount: number;
+  pct: number;
+};
+
+/**
+ * Every active student in a section with their attendance standing.
+ *
+ * Aggregated in PostgreSQL: a section's semester runs to thousands of attendance
+ * rows, past PostgREST's 1000-row default, so folding it in the Worker would both
+ * truncate silently and burn CPU. One row per student comes back instead.
+ *
+ * Students with no marked attendance are included at 0% rather than dropped, so the
+ * table matches the roster.
+ */
+export async function batchOverview(
+  db: SupabaseClient,
+  sectionId: string,
+  organizationId: string,
+  range: DateRange
+): Promise<BatchAttendanceRow[]> {
+  const rows = many<BatchAttendanceRow>(
+    await db.rpc("batch_attendance_overview", {
+      p_section_id: sectionId,
+      p_organization_id: organizationId,
+      ...rangeArgs(range),
+    }),
+    "analytics.batchOverview"
+  );
+  return rows.map((r) => ({
+    studentId: r.studentId,
+    rollNo: r.rollNo,
+    name: r.name,
+    present: Number(r.present),
+    total: Number(r.total),
+    lateCount: Number(r.lateCount),
+    absentCount: Number(r.absentCount),
+    pct: Number(r.pct),
+  }));
+}

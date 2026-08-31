@@ -33,3 +33,9 @@ export function dateFilter(query: { dateFrom?: string; dateTo?: string }) {
     },
   };
 }
+
+/** Batch overview: one section's roster with each student's standing. */
+export const batchOverviewQuerySchema = z.object({
+  sectionId: z.string().cuid(),
+  ...dateRange,
+});

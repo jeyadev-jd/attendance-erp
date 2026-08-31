@@ -102,6 +102,48 @@ export default function MarkAttendancePage() {
     setDraft(next);
   }
 
+  /**
+   * Copies the previous hour's statuses into the draft.
+   *
+   * Draft only — nothing is written until Save, so a wrong copy is undone by
+   * Clear or by overwriting individual students. Rows already locked keep their
+   * saved value and are skipped, as with every other bulk action here.
+   *
+   * Statuses the previous hour holds but this form cannot set (CANCELLED, and the
+   * other non-markable ones) are dropped rather than coerced, so copying never
+   * invents a status the marker did not choose.
+   */
+  const copyPrevious = useMutation({
+    mutationFn: () => attendanceApi.getMarkList(token!, date, sectionId, hourNumber - 1),
+    onSuccess: (prev) => {
+      const markable = new Set<MarkableStatus>(["PRESENT", "ABSENT", "LATE", "OD"]);
+      const lockedNow = new Set(students.filter((s) => s.isLocked).map((s) => s.studentId));
+      const next: Record<string, MarkableStatus> = {};
+      let copied = 0;
+      for (const row of prev.students) {
+        if (!row.status || lockedNow.has(row.studentId)) continue;
+        if (!markable.has(row.status as MarkableStatus)) continue;
+        next[row.studentId] = row.status as MarkableStatus;
+        copied++;
+      }
+      setDraft(next);
+      setError(null);
+      setNotice(
+        copied === 0
+          ? `Hour ${hourNumber - 1} has no marks to copy.`
+          : `Copied ${copied} student${copied === 1 ? "" : "s"} from hour ${hourNumber - 1}. Not saved yet — press Save.`
+      );
+    },
+    onError: (err) => {
+      setNotice(null);
+      setError(
+        err instanceof ApiError
+          ? `Could not read hour ${hourNumber - 1}: ${err.message}`
+          : `Could not read hour ${hourNumber - 1}`
+      );
+    },
+  });
+
   return (
     <AppShell>
       <PageHeader title="Mark attendance" subtitle="Pick a date, section and hour" />
@@ -184,6 +226,16 @@ export default function MarkAttendancePage() {
                   <Button variant="secondary" onClick={() => setAll("ABSENT")} className="px-3 text-xs">
                     All absent
                   </Button>
+                  {hourNumber > 1 && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => copyPrevious.mutate()}
+                      disabled={copyPrevious.isPending}
+                      className="px-3 text-xs"
+                    >
+                      {copyPrevious.isPending ? "Copying…" : `Copy hour ${hourNumber - 1}`}
+                    </Button>
+                  )}
                   {unsaved > 0 && (
                     <Button variant="secondary" onClick={() => setDraft({})} className="px-3 text-xs">
                       Clear

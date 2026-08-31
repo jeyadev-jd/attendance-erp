@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader, Card, CardTitle, Badge, Alert, Spinner, EmptyState } from "@/components/ui";
@@ -19,12 +20,25 @@ const STATUS_TONE: Record<string, "green" | "red" | "amber" | "blue" | "slate"> 
   CANCELLED: "slate",
 };
 
+/** Local YYYY-MM-DD, not toISOString — that shifts the date for anyone behind UTC. */
+function todayInput(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export default function StudentDashboardPage() {
   const token = useToken();
+  const [day, setDay] = useState(todayInput());
+
+  // `day` is part of the key so switching dates refetches, and React Query keeps
+  // each day cached — flipping back and forth costs no extra requests.
   const { data, isLoading, error } = useQuery({
-    queryKey: ["student-dashboard"],
-    queryFn: () => studentApi.getDashboard(token!),
+    queryKey: ["student-dashboard", day],
+    queryFn: () => studentApi.getDashboard(token!, day),
     enabled: !!token,
+    // The summary stats above are semester-wide and identical across days, so
+    // holding the previous data avoids the whole page blanking on a date change.
+    placeholderData: (prev) => prev,
   });
 
   return (
@@ -85,9 +99,25 @@ export default function StudentDashboardPage() {
           </Card>
 
           <Card>
-            <CardTitle>Today</CardTitle>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle>{day === todayInput() ? "Today" : "Attendance"}</CardTitle>
+              <input
+                type="date"
+                value={day}
+                max={todayInput()}
+                onChange={(e) => setDay(e.target.value || todayInput())}
+                className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                aria-label="Show attendance for date"
+              />
+            </div>
             {!data.todayTimeline.length ? (
-              <EmptyState message="No classes marked today." />
+              <EmptyState
+                message={
+                  day === todayInput()
+                    ? "No classes marked today."
+                    : "No classes marked on this date."
+                }
+              />
             ) : (
               <ul className="mt-3 divide-y">
                 {data.todayTimeline.map((t) => (

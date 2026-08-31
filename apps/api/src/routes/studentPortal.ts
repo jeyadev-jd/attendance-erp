@@ -21,6 +21,7 @@ import {
 } from "../lib/calculators";
 import {
   semesterQuerySchema,
+  dashboardQuerySchema,
   timelineQuerySchema,
   simulateSchema,
   subjectPlannerQuerySchema,
@@ -57,7 +58,10 @@ async function estimateRemainingHours(
 }
 
 studentPortal.get("/dashboard", async (c) => {
-  const query = semesterQuerySchema.parse({ semesterId: c.req.query("semesterId") });
+  const query = dashboardQuerySchema.parse({
+    semesterId: c.req.query("semesterId"),
+    date: c.req.query("date"),
+  });
   const db = requireSupabase(c);
   const user = c.get("user");
 
@@ -97,8 +101,11 @@ studentPortal.get("/dashboard", async (c) => {
     total: t.total,
   }));
 
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const today = await repo.todayRecords(db, student.id, new Date(`${todayStr}T00:00:00.000Z`));
+  // The day the timeline card shows. Defaults to today when the caller omits it,
+  // so the dashboard keeps working unchanged for anything that does not pass a date.
+  // One student on one date is a handful of rows, indexed — no paging needed.
+  const dayStr = query.date ?? new Date().toISOString().slice(0, 10);
+  const today = await repo.todayRecords(db, student.id, new Date(`${dayStr}T00:00:00.000Z`));
 
   return c.json({
     overallPct,
@@ -108,6 +115,8 @@ studentPortal.get("/dashboard", async (c) => {
     lateCount,
     projectedEndPct: projectedEndPct(present, total, remainingHours, attendRate),
     subjectWise,
+    // Echoed back so the client can confirm which day it is looking at.
+    timelineDate: dayStr,
     todayTimeline: today.map((r: any) => ({
       hourNumber: r.hourNumber,
       subject: r.subject.name,

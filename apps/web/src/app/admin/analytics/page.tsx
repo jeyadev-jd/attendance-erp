@@ -18,8 +18,9 @@ import {
   Input,
   Field,
 } from "@/components/ui";
-import { analyticsApi, type DateRange } from "@/lib/api";
+import { analyticsApi, batchApi, type DateRange } from "@/lib/api";
 import { useSemesters, useSections, useToken, DAY_SHORT, toDateInput } from "@/lib/hooks";
+import { useClaims, isAdminRole } from "@/store/authStore";
 
 const HOURS = [1, 2, 3, 4, 5, 6, 7];
 const WEEKDAYS = [1, 2, 3, 4, 5, 6];
@@ -49,6 +50,19 @@ export default function AdminAnalyticsPage() {
   const [bunkerDate, setBunkerDate] = useState(toDateInput(new Date()));
   const [bunkerSectionId, setBunkerSectionId] = useState("");
 
+  // Batch overview is plain attendance, so FACULTY sees it. The bunk-prediction
+  // cards below are admin-only and mirror the API's own guard — hiding them here is
+  // presentation, not enforcement; the endpoints reject FACULTY regardless.
+  const claims = useClaims();
+  const canSeeBunkTools = isAdminRole(claims?.role);
+  const [batchSectionId, setBatchSectionId] = useState("");
+
+  const batch = useQuery({
+    queryKey: ["batch-overview", batchSectionId, rangeKey],
+    queryFn: () => batchApi.overview(token!, batchSectionId, range),
+    enabled: !!token && !!batchSectionId,
+  });
+
   function applyPreset(days: number) {
     const to = new Date();
     const from = new Date(to.getTime() - days * 86400_000);
@@ -75,7 +89,9 @@ export default function AdminAnalyticsPage() {
   const bunks = useQuery({
     queryKey: ["bunk-leaderboard", semesterId, 10, rangeKey],
     queryFn: () => analyticsApi.bunkLeaderboard(token!, semesterId, 10, range),
-    enabled,
+    // Not merely hidden: FACULTY never issues the request, so the endpoint's 403
+    // does not surface as a failed query in the console or network tab.
+    enabled: enabled && canSeeBunkTools,
   });
   const late = useQuery({
     queryKey: ["late-analytics", semesterId, rangeKey],
@@ -90,7 +106,7 @@ export default function AdminAnalyticsPage() {
   const dailyBunkers = useQuery({
     queryKey: ["daily-bunkers", semesterId, bunkerDate, bunkerSectionId],
     queryFn: () => analyticsApi.dailyBunkers(token!, semesterId, bunkerDate, bunkerSectionId || undefined),
-    enabled: !!token && !!semesterId && !!bunkerDate,
+    enabled: !!token && !!semesterId && !!bunkerDate && canSeeBunkTools,
   });
 
   const cellMap = new Map((heatmap.data?.cells ?? []).map((c) => [`${c.dayOfWeek}-${c.hourNumber}`, c]));
@@ -160,6 +176,67 @@ export default function AdminAnalyticsPage() {
             </p>
           </Card>
           <Card>
+            <CardTitle>Batch attendance</CardTitle>
+            <p className="mt-1 text-xs text-slate-500">
+              Every student in a section with their standing, worst first. Counts are aggregated in
+              the database, so the size of the section does not change what this costs.
+            </p>
+            <div className="mt-3 max-w-sm">
+              <Field label="Section">
+                <Select value={batchSectionId} onChange={(e) => setBatchSectionId(e.target.value)}>
+                  <option value="">Choose a section…</option>
+                  {sections.data?.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+            {!batchSectionId ? (
+              <EmptyState message="Pick a section to see its roster." />
+            ) : batch.isLoading ? (
+              <Spinner />
+            ) : !batch.data?.length ? (
+              <EmptyState message="No active students in this section." />
+            ) : (
+              <TableScroll>
+                <table className="mt-3 w-full min-w-[34rem] text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-xs text-slate-500">
+                      <th className="py-2 pr-2">Roll no</th>
+                      <th className="py-2 pr-2">Name</th>
+                      <th className="py-2 pr-2 text-right">Present</th>
+                      <th className="py-2 pr-2 text-right">Total</th>
+                      <th className="py-2 pr-2 text-right">Late</th>
+                      <th className="py-2 pr-2 text-right">Absent</th>
+                      <th className="py-2 text-right">%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {batch.data.map((r) => (
+                      <tr key={r.studentId} className="border-b last:border-0">
+                        <td className="py-2 pr-2 font-medium">{r.rollNo}</td>
+                        <td className="py-2 pr-2">{r.name}</td>
+                        <td className="py-2 pr-2 text-right tabular-nums">{r.present}</td>
+                        <td className="py-2 pr-2 text-right tabular-nums">{r.total}</td>
+                        <td className="py-2 pr-2 text-right tabular-nums">{r.lateCount}</td>
+                        <td className="py-2 pr-2 text-right tabular-nums">{r.absentCount}</td>
+                        <td className="py-2 text-right">
+                          {/* 75% is the warning band below the usual 80% minimum. */}
+                          <Badge tone={r.pct >= 80 ? "green" : r.pct >= 75 ? "amber" : "red"}>
+                            {r.pct.toFixed(1)}%
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
+            )}
+          </Card>
+          {canSeeBunkTools && (
+          <Card>
             <CardTitle>Today's bunkers</CardTitle>
             <p className="mt-1 text-xs text-slate-500">
               Who was absent on a given date, and exactly which hours — the fastest way to catch a bunk.
@@ -202,6 +279,7 @@ export default function AdminAnalyticsPage() {
               </ul>
             )}
           </Card>
+          )}
 
           <Card>
             <CardTitle>Heatmap — day × hour</CardTitle>
@@ -269,6 +347,9 @@ export default function AdminAnalyticsPage() {
           </Card>
 
           <div className="grid gap-4 lg:grid-cols-2">
+            {/* Bunk leaderboard is prediction, not record-keeping — admin only, mirroring
+                the API guard. Late analytics beside it is plain attendance, so it stays. */}
+            {canSeeBunkTools && (
             <Card>
               <CardTitle>Bunk leaderboard</CardTitle>
               <p className="mt-1 text-xs text-slate-500">Detected mid-class bunk patterns, worst first.</p>
@@ -289,6 +370,7 @@ export default function AdminAnalyticsPage() {
                 </ul>
               )}
             </Card>
+            )}
 
             <Card>
               <CardTitle>Late analytics</CardTitle>

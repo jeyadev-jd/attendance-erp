@@ -84,6 +84,8 @@ export type DashboardData = {
   lateCount: number;
   projectedEndPct: number;
   subjectWise: { subjectId: string; name: string; pct: number; present: number; total: number }[];
+  /** The day todayTimeline describes (YYYY-MM-DD) — today unless a date was requested. */
+  timelineDate: string;
   todayTimeline: { hourNumber: number; subject: string; status: string }[];
 };
 
@@ -159,7 +161,9 @@ export const authApi = {
 };
 
 export const studentApi = {
-  getDashboard: (token: string) => request<DashboardData>("/api/student/dashboard", {}, token),
+  /** `date` picks which day the timeline card shows; omitted means today. */
+  getDashboard: (token: string, date?: string) =>
+    request<DashboardData>(`/api/student/dashboard${qs({ date })}`, {}, token),
   /** One entry per date that has records — days with no marks are simply absent from the list. */
   timeline: (token: string, from?: string, to?: string) =>
     request<
@@ -486,6 +490,27 @@ export type ManagedUser = {
   mustChangePassword: boolean;
   createdAt: string;
   hasStudentProfile: boolean;
+};
+
+export type BatchAttendanceRow = {
+  studentId: string;
+  rollNo: string;
+  name: string;
+  present: number;
+  total: number;
+  lateCount: number;
+  absentCount: number;
+  pct: number;
+};
+
+export const batchApi = {
+  /** Every active student in a section with their standing. Aggregated server-side. */
+  overview: (token: string, sectionId: string, range?: { dateFrom?: string; dateTo?: string }) =>
+    request<BatchAttendanceRow[]>(
+      `/api/admin/analytics/batch-overview${qs({ sectionId, ...range })}`,
+      {},
+      token
+    ),
 };
 
 export const userApi = {

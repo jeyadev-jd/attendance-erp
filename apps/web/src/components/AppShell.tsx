@@ -8,15 +8,22 @@ import { useAuthStore, useClaims, isAdminRole, type Role } from "@/store/authSto
 import { notificationApi } from "@/lib/api";
 import { cn } from "./ui";
 
-type NavItem = { href: string; label: string; short: string; roles: "admin" | "student" | "all" };
+type NavItem = {
+  href: string;
+  label: string;
+  short: string;
+  roles: "admin" | "student" | "all";
+  /** Also shown to FACULTY. Everything without this is admin-only. */
+  faculty?: boolean;
+};
 
 // Mobile shows only the first four `primary` items in the bottom bar; the rest
 // live in the "More" sheet on mobile and the full sidebar on desktop.
 const ADMIN_NAV: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", short: "Home", roles: "admin" },
+  { href: "/dashboard", label: "Dashboard", short: "Home", roles: "admin", faculty: true },
   { href: "/attendance/mark", label: "Mark Attendance", short: "Mark", roles: "admin" },
-  { href: "/admin/analytics", label: "Analytics", short: "Stats", roles: "admin" },
-  { href: "/admin/students", label: "Students", short: "Students", roles: "admin" },
+  { href: "/admin/analytics", label: "Analytics", short: "Stats", roles: "admin", faculty: true },
+  { href: "/admin/students", label: "Students", short: "Students", roles: "admin", faculty: true },
   // Class admins are students in their own batch, so they get the student portal too.
   { href: "/student/dashboard", label: "My Attendance", short: "Mine", roles: "admin" },
   { href: "/student/calculators", label: "My Bunk Calculator", short: "Calc", roles: "admin" },
@@ -26,7 +33,7 @@ const ADMIN_NAV: NavItem[] = [
   { href: "/admin/structure", label: "Departments & Sections", short: "Structure", roles: "admin" },
   { href: "/admin/semesters", label: "Semesters", short: "Semesters", roles: "admin" },
   { href: "/admin/hour-config", label: "Hour Config", short: "Hours", roles: "admin" },
-  { href: "/admin/reports", label: "Reports", short: "Reports", roles: "admin" },
+  { href: "/admin/reports", label: "Reports", short: "Reports", roles: "admin", faculty: true },
   { href: "/admin/audit-logs", label: "Audit Logs", short: "Audit", roles: "admin" },
   { href: "/admin/settings", label: "Settings", short: "Settings", roles: "admin" },
 ];
@@ -40,10 +47,11 @@ const STUDENT_NAV: NavItem[] = [
 
 export function navFor(role: Role | undefined | null): NavItem[] {
   if (isAdminRole(role)) return ADMIN_NAV;
-  if (role === "FACULTY") {
-    // Faculty can view but not mark — the API enforces this; the UI just hides the marking entry point.
-    return ADMIN_NAV.filter((i) => i.href !== "/attendance/mark");
-  }
+  // Faculty read attendance but do not administer it, so they get the items marked
+  // `faculty` and nothing else. Flagging the four they can use beats listing the
+  // dozen they cannot — a new admin page is hidden by default rather than by
+  // remembering to add it to a blocklist.
+  if (role === "FACULTY") return ADMIN_NAV.filter((i) => i.faculty);
   return STUDENT_NAV;
 }
 

@@ -20,14 +20,22 @@ import {
   semesterRequiredQuerySchema,
   leaderboardQuerySchema,
   dailyBunkersQuerySchema,
+  batchOverviewQuerySchema,
 } from "../schemas/analytics";
 import * as repo from "@attendance/db/repos/analytics";
 import * as attendanceRepo from "@attendance/db/repos/attendance";
-import { findSemesterInOrg } from "@attendance/db/queries";
+import { findSemesterInOrg, findSectionInOrg } from "@attendance/db/queries";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const analytics = new Hono<AppEnv>();
-analytics.use("*", roleGuard("SUPER_ADMIN", "ADMIN", "CLASS_ADMIN"));
+// FACULTY is included at the router level so staff can reach the batch overview and
+// the coverage reports. The bunk-prediction endpoints re-guard themselves below:
+// safe-bunk maths tells a student exactly how much they can skip, which is a
+// student-facing planning tool rather than something staff should hand out.
+analytics.use("*", roleGuard("SUPER_ADMIN", "ADMIN", "CLASS_ADMIN", "FACULTY"));
+
+/** Endpoints that expose bunk-prediction rather than plain attendance. */
+const notFaculty = roleGuard("SUPER_ADMIN", "ADMIN", "CLASS_ADMIN");
 
 /**
  * Mirrors the assertSemesterInOrg guard in the Prisma router, including its 404.
@@ -80,7 +88,7 @@ analytics.get("/subject-comparison", async (c) => {
 });
 
 /** Students ranked by bunk-flag count (mid-class bunk pattern detections), worst first. */
-analytics.get("/bunk-leaderboard", async (c) => {
+analytics.get("/bunk-leaderboard", notFaculty, async (c) => {
   const query = leaderboardQuerySchema.parse({
     semesterId: c.req.query("semesterId"),
     limit: c.req.query("limit"),
@@ -104,7 +112,7 @@ analytics.get("/bunk-leaderboard", async (c) => {
  * and when" view. Distinct from bunk-leaderboard, which ranks by the mid-class
  * P->A pattern over a range; this is a flat per-day roll call.
  */
-analytics.get("/daily-bunkers", async (c) => {
+analytics.get("/daily-bunkers", notFaculty, async (c) => {
   const query = dailyBunkersQuerySchema.parse({
     semesterId: c.req.query("semesterId"),
     date: c.req.query("date"),
@@ -183,6 +191,30 @@ analytics.get("/subject-report", async (c) => {
   // Five queries and several folds in the Prisma route — including a two-step
   // correction lookup that mapped audit rows back to subjects — collapse into one.
   return c.json(await repo.subjectReport(db, query.semesterId, user.organizationId, query));
+});
+
+/**
+ * Every active student in one section with their attendance standing — the batch
+ * roll-up staff and admins use instead of opening students one at a time.
+ *
+ * Plain attendance only: present/absent/late counts and a percentage. No safe-bunk
+ * or recovery projection, so this stays available to FACULTY.
+ */
+analytics.get("/batch-overview", async (c) => {
+  const query = batchOverviewQuerySchema.parse({
+    sectionId: c.req.query("sectionId"),
+    dateFrom: c.req.query("dateFrom"),
+    dateTo: c.req.query("dateTo"),
+  });
+  const db = requireSupabase(c);
+  const user = c.get("user");
+
+  // Section ownership is proven inside the RPC as well; this produces the 404 the
+  // API contract promises rather than letting a Postgres exception surface as 500.
+  const section = await findSectionInOrg(db, query.sectionId, user.organizationId);
+  if (!section) throw new HTTPException(404, { message: "Section not found" });
+
+  return c.json(await repo.batchOverview(db, query.sectionId, user.organizationId, query));
 });
 
 export default analytics;
