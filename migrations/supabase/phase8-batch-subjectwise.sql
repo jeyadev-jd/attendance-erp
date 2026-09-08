@@ -79,6 +79,12 @@ BEGIN
   JOIN subjects sub ON sub.id = a."subjectId"
   WHERE st."sectionId" = p_section_id
     AND st.status = 'ACTIVE'
+    -- Non-counting subjects (mentor-mentee, club activity) are marked so absences
+    -- are on record, but they never move a percentage — so they have no place in a
+    -- percentage grid. Excluded here as well as by the row-level flag, because a
+    -- subject flagged non-counting after some rows were already marked leaves those
+    -- rows with the old snapshot (see phase10).
+    AND s."countsForAttendance" = true
   GROUP BY st.id, st."rollNo", st.name, sub.id, sub.code, sub.name
   -- Total order: rollNo then subject code, so the grid builds identically every
   -- time rather than reshuffling between requests.

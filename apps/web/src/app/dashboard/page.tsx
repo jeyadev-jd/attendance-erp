@@ -87,7 +87,7 @@ export default function DashboardPage() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Card>
               <p className="text-xs text-slate-500">Org-wide attendance</p>
-              <p className="mt-1 text-2xl font-semibold">{overall === null ? "—" : `${overall.toFixed(1)}%`}</p>
+              <p className="mt-1 text-2xl font-semibold">{overall === null ? "—" : `${overall.toFixed(0)}%`}</p>
             </Card>
             <Card>
               <p className="text-xs text-slate-500">Subjects tracked</p>
@@ -114,7 +114,7 @@ export default function DashboardPage() {
               <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div>
                   <p className="text-xs text-slate-500">Overall</p>
-                  <p className="mt-0.5 text-xl font-semibold">{myAttendance.data.overallPct.toFixed(1)}%</p>
+                  <p className="mt-0.5 text-xl font-semibold">{myAttendance.data.overallPct.toFixed(0)}%</p>
                 </div>
                 <div>
                   <p className="text-xs text-slate-500">Risk</p>
@@ -157,7 +157,7 @@ export default function DashboardPage() {
                     <li key={s.subjectId}>
                       <div className="flex items-center justify-between text-sm">
                         <span className="truncate pr-2">{s.name}</span>
-                        <span className="shrink-0 font-medium">{s.pct.toFixed(1)}%</span>
+                        <span className="shrink-0 font-medium">{s.pct.toFixed(0)}%</span>
                       </div>
                       <div className="mt-1 h-1.5 rounded-full bg-slate-100">
                         <div

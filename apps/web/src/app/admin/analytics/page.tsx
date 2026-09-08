@@ -112,7 +112,7 @@ export default function AdminAnalyticsPage() {
   const cellMap = new Map((heatmap.data?.cells ?? []).map((c) => [`${c.dayOfWeek}-${c.hourNumber}`, c]));
   const subjectChart = (subjects.data ?? []).slice(0, 10).map((s) => ({
     label: s.name.length > 12 ? `${s.name.slice(0, 12)}…` : s.name,
-    pct: Number(s.pct.toFixed(1)),
+    pct: Number(s.pct.toFixed(0)),
   }));
 
   return (
@@ -181,7 +181,12 @@ export default function AdminAnalyticsPage() {
               Every student against every subject they are marked in. An overall total hides a
               student who is fine on average but failing one subject, which is what this is for.
             </p>
-            <div className="mt-3 max-w-sm">
+            {/* The date inputs write straight to `range`, the same state the filter at the
+                top of the page uses — one range drives every card, and setting it here or
+                there is the same action. Repeated on this card because the batch grid is
+                the one people reach for when they want a specific window (a month, a
+                revision block) and hunting for a filter elsewhere on the page is friction. */}
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
               <Field label="Section">
                 <Select value={batchSectionId} onChange={(e) => setBatchSectionId(e.target.value)}>
                   <option value="">Choose a section…</option>
@@ -192,7 +197,48 @@ export default function AdminAnalyticsPage() {
                   ))}
                 </Select>
               </Field>
+              <Field label="From">
+                <Input
+                  type="date"
+                  value={draft.dateFrom}
+                  max={draft.dateTo || undefined}
+                  onChange={(e) => {
+                    const next = { ...draft, dateFrom: e.target.value };
+                    setDraft(next);
+                    setRange({ dateFrom: next.dateFrom || undefined, dateTo: next.dateTo || undefined });
+                  }}
+                />
+              </Field>
+              <Field label="To">
+                <Input
+                  type="date"
+                  value={draft.dateTo}
+                  min={draft.dateFrom || undefined}
+                  onChange={(e) => {
+                    const next = { ...draft, dateTo: e.target.value };
+                    setDraft(next);
+                    setRange({ dateFrom: next.dateFrom || undefined, dateTo: next.dateTo || undefined });
+                  }}
+                />
+              </Field>
             </div>
+            {(range.dateFrom || range.dateTo) && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                <span>
+                  Showing {range.dateFrom || "start of semester"} to {range.dateTo || "today"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraft({ dateFrom: "", dateTo: "" });
+                    setRange({});
+                  }}
+                  className="text-blue-600 hover:underline"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
             {!batchSectionId ? (
               <EmptyState message="Pick a section to see its roster." />
             ) : batch.isLoading ? (
@@ -336,7 +382,7 @@ export default function AdminAnalyticsPage() {
                           return (
                             <td key={hour}>
                               <div
-                                title={cell ? `${cell.pct.toFixed(1)}% of ${cell.total}` : "No classes"}
+                                title={cell ? `${cell.pct.toFixed(0)}% of ${cell.total}` : "No classes"}
                                 className={cn("flex h-9 items-center justify-center rounded", heatColor(pct))}
                               >
                                 {pct === null ? "—" : pct.toFixed(0)}

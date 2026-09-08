@@ -57,7 +57,7 @@ export default function StudentDashboardPage() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm text-slate-500">Overall attendance</p>
-                <p className="text-4xl font-bold">{data.overallPct.toFixed(1)}%</p>
+                <p className="text-4xl font-bold">{data.overallPct.toFixed(0)}%</p>
               </div>
               <Badge tone={RISK_TONE[data.riskLevel]} className="px-3 py-1 text-sm">
                 {data.riskLevel}
@@ -68,7 +68,7 @@ export default function StudentDashboardPage() {
               <Stat label="Safe bunk hours" value={data.safeBunkHours} hint="Hours you can miss and stay above the minimum" />
               <Stat label="Recovery hours" value={data.recoveryHours} hint="Hours to attend to get back above it" />
               <Stat label="Late count" value={data.lateCount} />
-              <Stat label="Projected end %" value={`${data.projectedEndPct.toFixed(1)}%`} />
+              <Stat label="Projected end %" value={`${data.projectedEndPct.toFixed(0)}%`} />
             </div>
           </Card>
 
@@ -83,7 +83,7 @@ export default function StudentDashboardPage() {
                     <div className="flex items-center justify-between text-sm">
                       <span className="truncate pr-2">{s.name}</span>
                       <span className="shrink-0 text-slate-500">
-                        {s.present}/{s.total} · <span className="font-medium text-slate-900">{s.pct.toFixed(1)}%</span>
+                        {s.present}/{s.total} · <span className="font-medium text-slate-900">{s.pct.toFixed(0)}%</span>
                       </span>
                     </div>
                     <div className="mt-1 h-1.5 rounded-full bg-slate-100">

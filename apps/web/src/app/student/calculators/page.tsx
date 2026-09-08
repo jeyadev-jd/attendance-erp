@@ -178,10 +178,10 @@ export default function CalculatorsPage() {
                       sim.data.simulatedPct < target ? "text-red-600" : "text-emerald-600"
                     }`}
                   >
-                    {sim.data.simulatedPct.toFixed(1)}%
+                    {sim.data.simulatedPct.toFixed(0)}%
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    Down from {sim.data.currentPct.toFixed(1)}% now.
+                    Down from {sim.data.currentPct.toFixed(0)}% now.
                   </p>
                 </div>
               )}

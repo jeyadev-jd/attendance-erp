@@ -18,14 +18,14 @@ export default function StudentAnalyticsPage() {
   const dayData = (data?.dayWise ?? [])
     .slice()
     .sort((a, b) => a.dayOfWeek - b.dayOfWeek)
-    .map((d) => ({ label: DAY_SHORT[d.dayOfWeek], pct: Number(d.pct.toFixed(1)) }));
+    .map((d) => ({ label: DAY_SHORT[d.dayOfWeek], pct: Number(d.pct.toFixed(0)) }));
 
   const hourData = (data?.hourWise ?? [])
     .slice()
     .sort((a, b) => a.hourNumber - b.hourNumber)
-    .map((h) => ({ label: `H${h.hourNumber}`, pct: Number(h.pct.toFixed(1)) }));
+    .map((h) => ({ label: `H${h.hourNumber}`, pct: Number(h.pct.toFixed(0)) }));
 
-  const trendData = (data?.trend ?? []).map((t) => ({ label: t.week.split("-W")[1] ?? t.week, pct: Number(t.pct.toFixed(1)) }));
+  const trendData = (data?.trend ?? []).map((t) => ({ label: t.week.split("-W")[1] ?? t.week, pct: Number(t.pct.toFixed(0)) }));
 
   return (
     <AppShell>
