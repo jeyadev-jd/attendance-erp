@@ -248,3 +248,15 @@ Class admins are usually students in the batch they administer, so they hold bot
   `prisma/seed-timetable.ts` with fictional data before making it public.
 - `.dev.vars`, `.env`, and `.cf-token` are gitignored. No credentials are committed.
 - The seed scripts' temporary password is a fallback for local development; override it with `SEED_TEMP_PASSWORD`.
+
+---
+
+## Author
+
+**Jeyadev R** · AI/ML Engineer & Full-Stack Developer · Chennai, India
+
+- Portfolio: [jeyadev.dev](https://jeyadev.dev/projects/attendance-erp)
+- GitHub: [@jeyadev-jd](https://github.com/jeyadev-jd)
+- LinkedIn: [r-jeyadev](https://www.linkedin.com/in/r-jeyadev)
+
+If this project is useful to you, a ⭐ on the repo helps others find it.
